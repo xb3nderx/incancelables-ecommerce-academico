@@ -1,0 +1,16 @@
+# Logs de ejecución
+storage/logs/*
+!storage/logs/.gitkeep
+
+# Configuración local / secretos
+.env
+.env.*
+
+# Dependencias
+/vendor/
+
+# Archivos del sistema/editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
