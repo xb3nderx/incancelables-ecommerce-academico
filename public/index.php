@@ -38,6 +38,11 @@ $metodo = $_SERVER['REQUEST_METHOD'] ?? 'GET';
 $ruta = (string) parse_url($_SERVER['REQUEST_URI'] ?? '/', PHP_URL_PATH);
 $ruta = '/' . ltrim($ruta, '/');
 
+$cors = require __DIR__ . '/../src/config/cors.php';
+require __DIR__ . '/../src/cors.php';
+
+aplicarCors($cors, $metodo, (string) ($_SERVER['HTTP_ORIGIN'] ?? ''));
+
 try {
     $rutas = require __DIR__ . '/../routes/api.php';
     require __DIR__ . '/../src/config/database.php';
