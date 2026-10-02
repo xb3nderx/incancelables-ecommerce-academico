@@ -9,7 +9,7 @@
 >
 > **Estado verificado (30/09/2026):** entorno DEV operativo; base de datos materializada con 15 tablas (sección 9); capa de aplicación **parcialmente implementada**: bloques `GET /api/productos`, `POST /api/pedidos`, verificación de email (mecanismo + endpoints `/validar` y `/reenvio`), **bloque de vencimiento/cancelación/inicio de pago** (`POST /api/pedidos/{id}/cancelar`, `POST /api/pedidos/{id}/pago` con `iniciar_pago`/`aceptar_correccion`, vencimiento del primer período y rutas con `{id}`) y **bloque de pagos con `DummyPaymentProvider`** (`PaymentProvider`/`DummyPaymentProvider`, `PaymentValidationService`, `PagoRepository`, creación de `Pago` + `PaymentValidationResult`, transición a `PROCESANDO_PAGO` y aplicación de `APROBADO`/`RECHAZADO`/`EN_PROCESO`) implementados y verificados (secciones 4, 10.3, 12, 13.2, 15, 15.4, 17.1, 17.2, 19 y 21).
 >
-> Este documento **no implica que todas las funcionalidades descriptas estén implementadas**. Refleja las decisiones de negocio cerradas hasta el 28/09/2026 y el estado real de implementación verificado el 30/09/2026 (sección 21). El detalle HTTP (códigos, parámetros, formatos) está definido para `GET /api/productos`, `POST /api/pedidos`, los dos endpoints de verificación de email, `POST /api/pedidos/{id}/cancelar` y — **desde el 30/09/2026** — para `POST /api/pedidos/{id}/pago` con inicio real de pago (`proveedor_id`, `items[]`, `simulacion`, creación de `Pago`, `PROCESANDO_PAGO` y resultados del proveedor; ver secciones 17.2 y 21). Del bloque de verificación de email siguen pendientes el canal real de envío del email y la URL/asunto/plantilla definitivos del checkout; del flujo de pago quedan pendientes el webhook/`MercadoPagoProvider` (POST-MVP), la confirmación de resultados `EN_PROCESO` y la resolución administrativa de casos de revisión, junto con `DTOs`, migraciones versionadas y la estructura interna de los `DTOs`.
+> Este documento **no implica que todas las funcionalidades descriptas estén implementadas**. Refleja las decisiones de negocio cerradas hasta el 28/09/2026 y el estado real de implementación verificado el 30/09/2026 (sección 21). El detalle HTTP (códigos, parámetros, formatos) está definido para `GET /api/productos`, `POST /api/pedidos`, los dos endpoints de verificación de email, `POST /api/pedidos/{id}/cancelar` y — **desde el 30/09/2026** — para `POST /api/pedidos/{id}/pago` con inicio real de pago (`proveedor_id`, `items[]`, `simulacion`, creación de `Pago`, `PROCESANDO_PAGO` y resultados del proveedor; ver secciones 17.2 y 21). Del bloque de verificación de email siguen pendientes el canal de email `log` de DEV (decisión del 02/10/2026, secciones 5, 6 y 15), el canal real de envío del email y la URL/asunto/plantilla definitivos del checkout; del flujo de pago quedan pendientes el webhook/`MercadoPagoProvider` (POST-MVP), la confirmación de resultados `EN_PROCESO` y la resolución administrativa de casos de revisión, junto con `DTOs`, migraciones versionadas y la estructura interna de los `DTOs`.
 
 ---
 
@@ -167,6 +167,7 @@ PROD
 - Actualmente existe el entorno DEV local.
 - El entorno PROD queda pendiente de definición e implementación.
 - Las diferencias entre entornos deben resolverse mediante **configuración** y no mediante modificaciones manuales de la lógica de negocio.
+- **Canales de email por entorno (decisión cerrada el 02/10/2026):** en **DEV** la entrega del email de verificación se realiza con el **canal `log`** (ver secciones 6 y 15); en el **MVP/producción** rige el **canal real de envío**, requisito pendiente antes de dar por terminado el MVP. La elección entre canales se resuelve **mediante configuración**, sin modificar la lógica de negocio de verificación.
 
 ---
 
@@ -189,6 +190,8 @@ XAMPP
 - Respuesta HTTP **200** verificada contra el Virtual Host.
 - La conexión PHP → MariaDB fue verificada correctamente (lectura de la base `incancelables_ecommerce`).
 - La integración de pagos con `DummyPaymentProvider` **ya está implementada y verificada desde el 30/09/2026** (bloque de pagos; ver sección 21). La integración **real** con Mercado Pago (`MercadoPagoProvider` + webhook) es POST-MVP.
+- **Transporte de correo en DEV (estado verificado):** DEV **no dispone de transporte real de correo** (sin MTA, sin SMTP ni APIs: `mail()` devuelve `false`). Hoy el enlace queda registrado en el `error_log` de Apache (`C:\xampp\apache\logs\error.log`), `last_sent_at` **no** se actualiza, `POST /api/email-verificaciones/reenvio` responde `502 error_envio_email` y el cooldown de 15 minutos (medido sobre `last_sent_at`) nunca se activa.
+- **Canal de email `log` en DEV (decisión cerrada el 02/10/2026):** durante el desarrollo la entrega del email de verificación se hará por un **canal de email por log**, exclusivamente infraestructura de desarrollo: genera el token real, persiste únicamente su hash (como actualmente), construye el enlace real de verificación y lo registra en log para poder recuperarlo durante las pruebas; el canal `log` **considera la entrega exitosa sin ejecutar un envío SMTP real** y, por lo tanto, **registra `last_sent_at`**. Debe permitir probar realmente: validación del token, transición `PEND_VERIF → PEND_PAGO`, reenvío, rotación del token, cooldown, `200 reenviado` y `429 cooldown_activo`. **Pendiente de implementar** (ver secciones 15, 15.4 y 20); no reemplaza el envío real requerido para el MVP final.
 
 ---
 
@@ -965,6 +968,7 @@ Separación de responsabilidades **cerrada**:
 
 - el mecanismo **NO envía emails** ni conoce su tipo, contenido o plantilla: **cada consumidor envía su propio email** (asunto, plantilla, URL). En el MVP, `PedidoService` invoca el mecanismo y envía el email de verificación del checkout; los consumidores futuros harán lo propio con sus propios emails;
 - la entrega puede diferir entre **desarrollo y producción** (en desarrollo el enlace puede entregarse por otro canal; en producción se envía por correo), manteniendo la misma lógica funcional: esa diferencia la maneja el consumidor que envía el email;
+- **canales de entrega por entorno (decisión cerrada el 02/10/2026):** en **DEV** la entrega se realiza con el **canal `log`** — token real, sólo su hash persistido, enlace real de verificación registrado en log para recuperarlo en las pruebas, entrega considerada **exitosa sin transporte SMTP** y por lo tanto con registro de `last_sent_at` —; en el **MVP/producción** rige el **canal real de envío** (SMTP, proveedor u otro canal apropiado; mecanismo a definir e implementar al preparar el entorno final). La elección entre canal de desarrollo y canal real se resuelve **mediante configuración por entorno** (sección 5) y **no** modificando la lógica de negocio de verificación ni las responsabilidades del mecanismo. El canal `log` es **exclusivamente infraestructura de desarrollo** y no reemplaza el envío real;
 - **flujo de confirmación:** el endpoint del consumidor recibe el enlace/token → invoca al mecanismo → el mecanismo valida → si es correcto, **el propio mecanismo registra `verified_at`** → devuelve el resultado → el consumidor decide la acción de negocio (p. ej. `PEND_VERIF → PEND_PAGO`; para la verificación de email, `PedidoService` procesa **todos** los `Pedido` asociados, ver sección 15.2). El consumidor **nunca** escribe `verified_at`. **No** se requiere callback ni notificación por eventos;
 - los cuatro concerns quedan separados: lógica genérica de verificación | lógica del `Pedido` | envío de emails | modelo histórico del newsletter.
 
@@ -1001,9 +1005,9 @@ Introducir el email **NO** significa que el comprador esté identificado.
 - En cambio, la **validación comercial** (existencia, producto activo, cantidades, stock, precio, disponibilidad y reglas comerciales) **SIEMPRE** se realiza nuevamente cuando corresponde validar un carrito o un `Pedido` (ver sección 17); nunca se da por válida solamente porque el carrito fue corregido por el backend.
 - El reenvío se rige por un **cooldown parametrizado** sobre `last_sent_at`: cumplido el cooldown puede solicitarse el reenvío, generando un token nuevo (rotación; el token anterior queda inválido).
 - El mecanismo es genérico: **no** distingue consumidores dentro de la verificación (sin campo de contexto); la lógica propia de cada consumidor (compra, y futuros: newsletter, registro, recuperación de contraseña) vive fuera del mecanismo.
-- En desarrollo y producción pueden existir diferencias de entrega del email, manteniendo la misma lógica funcional.
+- En desarrollo y producción pueden existir diferencias de entrega del email, manteniendo la misma lógica funcional (**decisión de canales por entorno del 02/10/2026:** canal `log` en DEV y canal real de envío para el MVP/producción, distinguidos por configuración; ver secciones 5, 6 y más abajo).
 
-El mecanismo genérico y la estructura de `emails_verificaciones` están **cerrados** (secciones 15 y 15.3). La implementación concreta (clases PHP, endpoints con sus códigos/parámetros y detalle HTTP) está realizada y verificada el 29/09/2026 (secciones 15.4, 19 y 21); sin migraciones versionadas (los cambios se aplicaron directamente sobre MariaDB). Quedan pendientes el canal real de envío del email y la URL/asunto/plantilla definitivos (sección 20).
+El mecanismo genérico y la estructura de `emails_verificaciones` están **cerrados** (secciones 15 y 15.3). La implementación concreta (clases PHP, endpoints con sus códigos/parámetros y detalle HTTP) está realizada y verificada el 29/09/2026 (secciones 15.4, 19 y 21); sin migraciones versionadas (los cambios se aplicaron directamente sobre MariaDB). Quedan pendientes el canal de email `log` de DEV (decisión del 02/10/2026, sección 21), el canal real de envío del email y la URL/asunto/plantilla definitivos (sección 20).
 
 ### 15.3. Estructura física de `emails_verificaciones` (cerrada)
 
@@ -1047,19 +1051,20 @@ Rutas registradas en `routes/api.php`, atendidas por `EmailVerificationControlle
 
 | Código | Cuerpo | Condición |
 |---|---|---|
-| `200` | `{"resultado":"reenviado"}` | cooldown cumplido: se genera un token **nuevo** (el anterior queda inválido), se envía el email y `last_sent_at = NOW()` sólo si el envío tuvo éxito |
+| `200` | `{"resultado":"reenviado"}` | cooldown cumplido: se genera un token **nuevo** (el anterior queda inválido), se envía el email y `last_sent_at = NOW()` sólo si la entrega fue exitosa **según el canal configurado** |
 | `429` | `{"error":"cooldown_activo","segundos_restantes":N}` | `TIMESTAMPDIFF(SECOND, last_sent_at, NOW()) < 900` (15 min) |
 | `409` | `{"error":"verificacion_ya_verificada"}` | `verified_at` no NULL |
 | `409` | `{"error":"pedido_no_pendiente_de_verificacion"}` | el `Pedido` no está en `PEND_VERIF` |
 | `409` | `{"error":"pedido_vencido","pedido":{...NO_PAGADO}}` | el `Pedido` estaba activo y venció el primer período (se pasa a `NO_PAGADO`; **30/09/2026**) |
 | `404` | `{"error":"pedido_inexistente"}` | `pedido_id` inexistente |
-| `502` | `{"error":"error_envio_email"}` | el envío falló (en DEV, sin MTA: `mail()` devuelve false); no se actualiza `last_sent_at` |
+| `502` | `{"error":"error_envio_email"}` | la entrega falló según el canal configurado (estado actual en DEV, sin MTA: `mail()` devuelve false); no se actualiza `last_sent_at`. Con el canal `log` de DEV este caso no se produce |
 | `400` | `{"error":"..."}` | `pedido_id` faltante/no numérico o JSON inválido |
 | `404` / `405` | — | ruta inexistente / método incorrecto |
 
 Notas de implementación:
 
-- el envío real está en `PedidoService::enviarEmailVerificacion` (método privado del consumidor): asunto "Confirmá tu compra en Incancelables", cuerpo de texto plano y URL `https://xb3nderx.github.io/incancelablesWeb/pages/resultado.html?flow=checkout&token=...`; el enlace siempre se registra en el `error_log` (`[incancelables] enlace de verificacion de email:` → `C:\xampp\apache\logs\error.log`) y después se intenta `mail()`. Sin SMTP, APIs ni credenciales: **el canal de envío real sigue pendiente** (sección 20);
+- el envío está en `PedidoService::enviarEmailVerificacion` (método privado del consumidor): asunto "Confirmá tu compra en Incancelables", cuerpo de texto plano y URL `https://xb3nderx.github.io/incancelablesWeb/pages/resultado.html?flow=checkout&token=...`. **Estado actual en DEV (verificado):** no hay transporte de correo (sin MTA, SMTP, APIs ni credenciales) — el enlace se registra en el `error_log` (`[incancelables] enlace de verificacion de email:` → `C:\xampp\apache\logs\error.log`), después `mail()` devuelve `false` y se registra `[incancelables] fallo de envio del email de verificacion a ...`, por lo que **`last_sent_at` no se actualiza** y `reenvio` responde `502 error_envio_email` sin activar el cooldown. **Decisión (02/10/2026):** en DEV esa entrega pasa a resolverse con el **canal `log`** (registra el enlace en log y considera la entrega exitosa, registrando `last_sent_at`, sin enviar correo); el **canal real de envío sigue pendiente** como requisito para dar por terminado el MVP (sección 20);
+- `last_sent_at` representa una **entrega exitosa según el canal configurado**: sólo se escribe cuando el canal en uso (hoy `mail()` en DEV; en DEV el canal `log` una vez implementado; en MVP/producción el canal real) confirma la entrega, y sobre ese valor se mide el cooldown de reenvío;
 - las fechas se calculan en SQL (`NOW()`, `DATE_ADD(NOW(), INTERVAL 7 DAY)`, `TIMESTAMPDIFF`) por la diferencia de timezone entre MariaDB y PHP;
 - son operaciones puntuales (insert/update de una fila) que no requieren transacción compuesta; la asociación `pedidos.email_verificacion_id` ocurre una vez confirmada la transacción del `Pedido`;
 - el token en claro nunca se persiste (sólo `token_hash`); no hay secretos ni HMAC en el mecanismo.
@@ -1349,7 +1354,7 @@ No está definido todavía (corresponde a la siguiente etapa de diseño técnico
 - estructura interna detallada de los Services y Repositories todavía no implementados (**RESUELTO el 30/09/2026**: `PaymentValidationService` y `PagoRepository` implementados; ver secciones 19.1, 19.2 y 21);
 - flujo técnico del resto del checkout (las reglas de negocio de validación comercial y corrección ya están cerradas, ver secciones 17 y 18; **ya implementado**: creación del `Pedido` con validación comercial en transacción (sección 17.1), tercera validación + corrección con `Pedido` existente + aceptación de corrección con sustitución en una transacción (`POST /api/pedidos/{id}/pago`, secciones 17.2 y 19.4) y cancelación voluntaria (sección 19.4); **pendiente**: recuperación de pedidos pendientes);
 - comportamiento de `PedidoRepository::buscarPorEmailVerificacion()`: **RESUELTO el 30/09/2026** — método reemplazado por `buscarTodosPorEmailVerificacion()` (consulta **todos** los `Pedido` asociados a la verificación, con orden determinístico `ORDER BY p.id`, `created_at` y `NOW()`); la confirmación N:1 transiciona todos los `PEND_VERIF` vigentes a `PEND_PAGO`, pasa a `NO_PAGADO` los `PEND_VERIF` vencidos y no toca el resto de estados, devolviendo `pedidos[]` (ver secciones 15.2 y 15.4);
-- implementación del mecanismo de verificación de email: **ya implementada y verificada el 29/09/2026** (estructura de `emails_verificaciones` con `last_sent_at`, comportamiento, separación de responsabilidades y flujo de confirmación cerrados — ver secciones 15, 15.3 y 15.4; clases PHP, endpoints y detalle HTTP implementados). **Pendiente de este bloque:** canal real de envío del email (hoy `mail()` sin MTA en DEV: el enlace queda en el `error_log` de Apache y `last_sent_at` no se actualiza; sin SMTP/APIs/credenciales) y URL/asunto/plantilla definitivos del checkout;
+- implementación del mecanismo de verificación de email: **ya implementada y verificada el 29/09/2026** (estructura de `emails_verificaciones` con `last_sent_at`, comportamiento, separación de responsabilidades y flujo de confirmación cerrados — ver secciones 15, 15.3 y 15.4; clases PHP, endpoints y detalle HTTP implementados). **Pendiente de este bloque:** (1) canal de email `log` de DEV (**decisión cerrada el 02/10/2026**, ver secciones 5, 6 y 15 — estrategia formal de desarrollo, todavía no implementada); (2) canal **real** de envío del email, **requisito para dar por terminado el MVP** (hoy DEV no tiene transporte de correo: `mail()` sin MTA, el enlace queda en el `error_log` de Apache y `last_sent_at` no se actualiza; sin SMTP/APIs/credenciales); (3) URL/asunto/plantilla definitivos del checkout;
 - implementación de `DummyPaymentProvider`: **RESUELTA el 30/09/2026** (contrato `PaymentProvider`, normalización y reglas ya estaban cerrados; la simulación se disparó mediante el parámetro opcional `simulacion` del request de `iniciar_pago` — `APROBADO` por defecto, `RECHAZADO` o `EN_PROCESO` — y los tres resultados atraviesan todo el flujo punta a punta; ver secciones 12.2, 17.2 y 21);
 - integración de pagos real con Mercado Pago (`MercadoPagoProvider`, webhook `POST /api/webhooks/mercadopago` y su modalidad de checkout — Checkout Pro vs Checkout API/Orders, detalle de implementación): **POST-MVP** (ver sección 12.2);
 - creación de `validaciones_pagos`, `validaciones_pagos_estados` (renombramiento de `pagos_estados`), `casos_revision` y sus catálogos, y ajuste de `pedidos_estados`: **ya aplicados en la base de datos** (ver sección 9); el catálogo `proveedores` **ya existe** con las filas `MERCADOPAGO` y `DUMMY` (sin cambios SQL); su concreción en código **ya está hecha** desde el 30/09/2026 (`PagoRepository`, `PaymentValidationService`, casos de revisión; ver secciones 19.1, 19.2 y 21);
@@ -1364,7 +1369,7 @@ No está definido todavía (corresponde a la siguiente etapa de diseño técnico
 - resolución administrativa de los casos de revisión `PAGADO_STOCK_NO_AFECTADO` y de los `PAGO_PROCESANDO_EXCEDIDO` que nunca reciben un resultado definitivo (fuera del MVP; ver sección 12.8);
 - frontend detallado y diseño visual;
 - administración MVP;
-- configuración de producción;
+- configuración de producción (incluye el canal real de email y la conmutación desde el canal `log` de DEV, que debe resolverse por configuración);
 - mecanismo técnico de concurrencia, transacciones y locks para la **afectación de stock** con pago aprobado (MariaDB): **ya implementado el 30/09/2026** (bloqueo `FOR UPDATE` de `productos` + descuento condicional en la transacción de la aprobación, ver secciones 10.3 y 19.6); *(también implementado desde el 29/09/2026 para la verificación de disponibilidad en la creación del `Pedido`: transacción de MariaDB + `SELECT ... FOR UPDATE` de `productos` en `POST /api/pedidos`, ver secciones 17.1 y 19.6)*;
 - valores concretos de las dos ventanas del `Pedido` (la del primer período tiene valor inicial **10 minutos**, parametrizable — ver sección 13.2; la del segundo período no fija valor), de `PAGO_MAX_INTENTOS` y de `PAGO_MAX_ESPERA_CONCILIACION` (comportamiento **cerrado como parametrizable**, no es un pendiente de diseño; se cargan en configuración);
 - esquema definitivo de las tablas futuras todavía inexistentes (historial de precios, historial de interacciones); `productos_imagenes` **ya existe** (ver sección 9);
@@ -1418,7 +1423,7 @@ Se implementaron y verificaron los tres primeros bloques del MVP, sin modificar 
 
 Arquitectura verificada en los tres bloques: `Route → Controller → Service → Repository → MariaDB`, con el SQL únicamente en Repositories y Controllers/Services sin SQL ni control transaccional. Concurrencia verificada con dos checkouts simultáneos (un solo `201` y una corrección, sin deadlocks). Pruebas del bloque de verificación: 20/20 OK (creación, `token_hash == SHA2(token,256)`, expiración, cooldown natural y con fixture, rotación de token, transición `PEND_VERIF → PEND_PAGO`, stock intacto, fallo de envío sin rollback del `Pedido` y regresión de los bloques 1 y 2). Tras las pruebas la base de datos quedó en su estado baseline (`pedidos`, `pedidos_items` y `emails_verificaciones` vacíos; 6 productos; `pedidos.AUTO_INCREMENT` no reseteado).
 
-Pendientes del bloque de verificación de email: canal de envío real (SMTP u otro) y URL/asunto/plantilla definitivos del checkout.
+Pendientes del bloque de verificación de email: canal de email `log` de DEV (**decisión cerrada el 02/10/2026**, ver "Decisión: canales de email por entorno" más abajo), canal de envío real (SMTP u otro; **requisito para dar por terminado el MVP**) y URL/asunto/plantilla definitivos del checkout.
 
 ### Implementación del bloque de vencimiento, cancelación e inicio de pago (30/09/2026)
 
@@ -1446,3 +1451,29 @@ Se implementó y verificó sobre el estado existente, sin modificar las decision
 Pruebas del bloque (30/09/2026): **46/46 OK** a nivel de servicio (`test_bloque_pagos.php`: aprobado completo con descuento único, rechazo → `PEND_PAGO` + reintento, límite de 3 intentos → `NO_PAGADO`, guardas `maximo_intentos_alcanzado`/`pago_ya_aprobado`, `EN_PROCESO` sin stock con compromiso activo, idempotencia de resultados definitivos, importe inconsistente → caso `PAGADO_STOCK_NO_AFECTADO`, stock insuficiente → `PAGADO_STOCK_NO_AFECTADO`, resolución de casos en el rechazo, validaciones de proveedor/simulación/carrito y restauración de baseline), **49/49 OK** de regresión del bloque anterior (`test_bloque_pago.php`, adaptado al nuevo contrato), **26/26 OK** vía HTTP de regresión (`http_tests2.php`) y **25/25 OK** vía HTTP del nuevo bloque (`http_tests3.php`: validación del body, corrección `carrito_desactualizado`, aprobado/rechazado/en_proceso punta a punta, guardas y vencimiento), más **18/18 OK** de regresión N:1. Tras las pruebas la base de datos quedó en su estado baseline (`pedidos`, `pedidos_items`, `emails_verificaciones`, `pagos`, `validaciones_pagos` y `casos_revision` vacíos; 6 productos con precios y stocks originales: `1:10, 2:15, 3:12, 4:8, 5:20, 6:10`).
 
 Quedan fuera de este bloque (por decisión de alcance, ver secciones 13.3 y 20): segundo período automatizado/`PAGO_PROCESANDO_EXCEDIDO` generado por tiempo, endpoint de confirmación de resultados `EN_PROCESO`, webhook/`MercadoPagoProvider` (POST-MVP), email post-pago, resolución administrativa de casos y cambios de esquema.
+
+### Decisión: canales de email por entorno (02/10/2026)
+
+*(Sólo actualización documental: sin código, sin configuración, sin base de datos, sin migraciones, sin frontend y sin pruebas.)*
+
+La entrega del email de verificación tendrá **separación explícita entre desarrollo y MVP/producción** (coherente con el principio de la sección 5: las diferencias entre entornos se resuelven por configuración).
+
+**DEV — canal de email por log:**
+
+- durante el desarrollo se utilizará un **canal de email por log**: se genera el token real, se persiste únicamente su hash (como actualmente), se construye el enlace real de verificación y **el enlace queda registrado en log** para poder recuperarlo durante las pruebas;
+- el canal DEV **considera la entrega exitosa sin ejecutar un envío SMTP real** y, por lo tanto, **registra `last_sent_at`**;
+- deben poder probarse realmente: **validación del token**, **transición `PEND_VERIF → PEND_PAGO`**, **reenvío**, **rotación del token**, **cooldown**, **`200 reenviado`** y **`429 cooldown_activo`**;
+- este mecanismo es **exclusivamente infraestructura de desarrollo**; **no reemplaza** el envío real requerido para el MVP final;
+- estado actual verificado: **DEV no dispone de transporte real de correo** (sin MTA: `mail()` devuelve `false`, el enlace queda en el `error_log` de Apache, `last_sent_at` no se actualiza y `reenvio` responde `502 error_envio_email` sin activar el cooldown). El canal `log` es la estrategia formal que reemplazará ese comportamiento en DEV y está **pendiente de implementar**.
+
+**MVP / producción — canal real de envío:**
+
+- antes de considerar terminado el MVP del E-Commerce deberá existir un **canal real de envío de email**;
+- el mecanismo concreto (SMTP, proveedor u otro canal apropiado) **se definirá e implementará cuando corresponda preparar el entorno final**;
+- **el proyecto no debe considerarse terminado para MVP/producción si la verificación de email depende de leer manualmente un log**.
+
+**Separación DEV / MVP:**
+
+- la arquitectura y la configuración deben **distinguir el canal de desarrollo del canal real sin cambiar la lógica de negocio de verificación** (ni las responsabilidades del mecanismo genérico, ver sección 15);
+- `last_sent_at` representa una **entrega exitosa según el canal configurado** y sigue siendo la base del cooldown de reenvío;
+- canales y reglas relacionadas en las secciones 5, 6, 15, 15.4 y 20 de este documento.
