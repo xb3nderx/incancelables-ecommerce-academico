@@ -9,6 +9,7 @@ spl_autoload_register(static function (string $clase): void {
         'Incancelables\\Repositories\\' => __DIR__ . '/../src/repositories/',
         'Incancelables\\Payments\\' => __DIR__ . '/../src/payments/',
         'Incancelables\\Models\\' => __DIR__ . '/../src/models/',
+        'Incancelables\\Mail\\' => __DIR__ . '/../src/mail/',
     ];
 
     foreach ($prefijos as $prefijo => $directorio) {
@@ -46,6 +47,15 @@ aplicarCors($cors, $metodo, (string) ($_SERVER['HTTP_ORIGIN'] ?? ''));
 try {
     $rutas = require __DIR__ . '/../routes/api.php';
     require __DIR__ . '/../src/config/database.php';
+    $configEmail = require __DIR__ . '/../src/config/email.php';
+
+    $emailChannel = $configEmail['channel'] ?? null;
+
+    if ($emailChannel === 'log') {
+        $emailSender = new \Incancelables\Mail\LogEmailSender();
+    } else {
+        throw new RuntimeException('Canal de email desconocido: ' . var_export($emailChannel, true));
+    }
 
     $productoRepository = new \Incancelables\Repositories\ProductoRepository($pdo);
     $pedidoRepository = new \Incancelables\Repositories\PedidoRepository($pdo);
@@ -63,6 +73,7 @@ try {
         $emailVerificationService,
         $pagoRepository,
         $paymentValidationService,
+        $emailSender,
     );
 
     $controladores = [

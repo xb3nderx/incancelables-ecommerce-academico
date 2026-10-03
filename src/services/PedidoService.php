@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Incancelables\Services;
 
+use Incancelables\Mail\EmailSender;
 use Incancelables\Models\PaymentValidationResult;
 use Incancelables\Payments\PaymentProviderException;
 use Incancelables\Repositories\PagoRepository;
@@ -14,7 +15,7 @@ final class PedidoService
 {
     private const ESTADOS_QUE_AFECTAN_DISPONIBILIDAD = ['PEND_VERIF', 'PEND_PAGO', 'PROCESANDO_PAGO'];
     private const ESTADOS_ACTIVOS_CHECKOUT = ['PEND_VERIF', 'PEND_PAGO'];
-    private const PRIMER_PERIODO_MINUTOS = 10;
+    private const PRIMER_PERIODO_MINUTOS = 40;
     private const PAGO_MAX_INTENTOS = 3;
     private const RESULTADOS_SIMULACION = ['APROBADO', 'RECHAZADO', 'EN_PROCESO'];
     private const URL_BASE_VERIFICACION = 'https://xb3nderx.github.io/incancelablesWeb/pages/resultado.html?flow=checkout';
@@ -25,6 +26,7 @@ final class PedidoService
         private EmailVerificationService $emailVerificationService,
         private PagoRepository $pagoRepository,
         private PaymentValidationService $paymentValidationService,
+        private EmailSender $emailSender,
     ) {
     }
 
@@ -843,20 +845,7 @@ final class PedidoService
             . "Si no realizaste esta solicitud, podés ignorar este mensaje.\n\n"
             . "Incancelables";
 
-        error_log('[incancelables] enlace de verificacion de email: ' . $enlace);
-
-        $enviado = @mail(
-            $email,
-            $asunto,
-            $cuerpo,
-            "From: no-reply@incancelables.com\r\nContent-Type: text/plain; charset=UTF-8\r\n"
-        );
-
-        if (!$enviado) {
-            error_log('[incancelables] fallo de envio del email de verificacion a ' . $email);
-        }
-
-        return $enviado;
+        return $this->emailSender->enviar($email, $asunto, $cuerpo);
     }
 
     private function agruparItems(array $items): array

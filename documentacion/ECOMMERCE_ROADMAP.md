@@ -48,14 +48,18 @@ Este roadmap define el orden en que esos conceptos serán llevados a una impleme
 
 1. `GET /api/productos`;
 2. `POST /api/pedidos` (inicio del checkout: primera ejecución de la validación comercial, con validación interna a transacción y bloqueo de filas de `productos`);
-3. verificación de email (mecanismo genérico `EmailVerificationService` + endpoints `POST /api/email-verificaciones/validar` y `POST /api/email-verificaciones/reenvio`, con inicio de la verificación dentro de `POST /api/pedidos` y transición `PEND_VERIF → PEND_PAGO` a cargo de `PedidoService`; la entrega del email en DEV queda decisionada como **canal `log`** (02/10/2026) y el envío real del email sigue pendiente para el MVP).
+3. verificación de email (mecanismo genérico `EmailVerificationService` + endpoints `POST /api/email-verificaciones/validar` y `POST /api/email-verificaciones/reenvio`, con inicio de la verificación dentro de `POST /api/pedidos` y transición `PEND_VERIF → PEND_PAGO` a cargo de `PedidoService`; la entrega del email en DEV queda decisionada como **canal `log`** (02/10/2026; **implementado el 03/10/2026**, bloque 8) y el envío real del email sigue pendiente para el MVP).
 
 **Implementación incremental: 30/09/2026** — bloques implementados y verificados sobre el estado anterior:
 
 4. **rutas con `{id}`** en el router (parámetros de segmento pasados al Controller, `405` con `Allow` calculado por patrón, `400 pedido_id inválido`);
-5. **vencimiento general del primer período (10 minutos)** para `PEND_VERIF`/`PEND_PAGO` (aplicación perezosa con `NOW()` de MariaDB; `409 pedido_vencido` y `NO_PAGADO` en cada operación sobre un `Pedido` vencido);
+5. **vencimiento general del primer período (10 minutos en ese bloque; hoy el valor operativo es de 40 minutos**, ajuste no definitivo — ver el bloque 8 y la sección 2.1) para `PEND_VERIF`/`PEND_PAGO` (aplicación perezosa con `NOW()` de MariaDB; `409 pedido_vencido` y `NO_PAGADO` en cada operación sobre un `Pedido` vencido);
 6. **`POST /api/pedidos/{id}/cancelar`** (cancelación voluntaria) y **`POST /api/pedidos/{id}/pago`** con `accion: "iniciar_pago"` (tercera validación) y `accion: "aceptar_correccion"` (revalidación completa + sustitución en una misma transacción, heredando estado y verificación de email);
 7. **bloque de pagos con `DummyPaymentProvider`**: `PaymentValidationService`/`PaymentProvider`/`DummyPaymentProvider`, `PagoRepository`, creación de `Pago` + `PaymentValidationResult`, transición `PEND_PAGO → PROCESANDO_PAGO`, aplicación de `APROBADO`/`RECHAZADO`/`EN_PROCESO` con afectación de stock, casos de revisión y parámetro `simulacion` (segundo período automatizado, webhook y `MercadoPagoProvider`: POST-MVP).
+
+**Implementación incremental: 03/10/2026** — bloque implementado y verificado sobre el estado anterior:
+
+8. **canal de email `log` de DEV** (decisión del 02/10/2026): contrato `EmailSender` + `LogEmailSender` en `src/mail/`, configuración `src/config/email.php` (`channel = log`) y composition root en `public/index.php` — `PedidoService` ya no invoca `mail()`: delega el transporte en `EmailSender` y la entrega se registra en `error_log`, se considera exitosa y escribe `last_sent_at`; pruebas: creación → log con enlace → `429 cooldown_activo` → `200 reenviado` con rotación → `200 confirmado` → `PEND_PAGO`. Ajuste operativo no definitivo del primer período de `10` a **`40`** minutos (`PedidoService::PRIMER_PERIODO_MINUTOS`, parámetro configurable) para que el `Pedido` no venza antes del primer reenvío con cooldown de 15 minutos.
 
 Arquitectura en uso: `Route → Controller → Service → Repository → MariaDB`, con el SQL únicamente en Repositories. `ProductoService` no calcula disponibilidad; `PedidoService` coordina la disponibilidad, la validación comercial, el vencimiento, la cancelación y el flujo completo de pago (con `PaymentValidationService` como única frontera hacia el proveedor), y consume el mecanismo genérico de verificación de email. El resto de la capa de aplicación del MVP (recuperación de pedidos pendientes y administración) sigue sin implementar (ver sección 2.1).
 
@@ -65,7 +69,7 @@ El diseño técnico no debe intentar implementar desde el comienzo todas las fun
 
 ## 2.1. Estado de implementación
 
-*(Auditoría de solo lectura el 28/09/2026; actualización de estado el 29/09/2026 tras completar y verificar los tres primeros bloques: `GET /api/productos`, `POST /api/pedidos` y verificación de email; actualización del 30/09/2026 tras el bloque de rutas `{id}` + vencimiento del primer período + `POST /api/pedidos/{id}/cancelar` + `POST /api/pedidos/{id}/pago` hasta la tercera validación, y del mismo 30/09/2026 tras el bloque de pagos con `DummyPaymentProvider`.)*
+*(Auditoría de solo lectura el 28/09/2026; actualización de estado el 29/09/2026 tras completar y verificar los tres primeros bloques: `GET /api/productos`, `POST /api/pedidos` y verificación de email; actualización del 30/09/2026 tras el bloque de rutas `{id}` + vencimiento del primer período + `POST /api/pedidos/{id}/cancelar` + `POST /api/pedidos/{id}/pago` hasta la tercera validación, y del mismo 30/09/2026 tras el bloque de pagos con `DummyPaymentProvider`; actualización del 03/10/2026 tras el canal de email `log` de DEV y el ajuste operativo del primer período a 40 minutos.)*
 
 **Infraestructura (operativa):**
 
@@ -97,9 +101,10 @@ El diseño técnico no debe intentar implementar desde el comienzo todas las fun
 - `public/.htaccess`: reescritura de URLs hacia `index.php` (`RewriteEngine On`);
 - `routes/api.php`: definición de rutas (`GET /api/productos`, `POST /api/pedidos`, `POST /api/pedidos/{id}/cancelar`, `POST /api/pedidos/{id}/pago`, `POST /api/email-verificaciones/validar`, `POST /api/email-verificaciones/reenvio`);
 - `src/controllers/`: `ProductoController.php`, `PedidoController.php` (`crear`, `cancelar`, `pago`), `EmailVerificationController.php`;
-- `src/services/`: `ProductoService.php`, `PedidoService.php` (coordina disponibilidad y validación comercial — centralizada en `PedidoService::validarCarrito()` —, aplica el vencimiento del primer período, cancela Pedidos, ejecuta la tercera validación, el inicio real de pago con fase A/B, la aceptación de corrección y la aplicación de los resultados del proveedor — `aplicarAprobado()`/`aplicarRechazado()` —, e inicia/confirma/reenvía la verificación de email como consumidor del mecanismo), `EmailVerificationService.php` (mecanismo genérico, agnóstico de contexto, sin envío de emails) y — **desde el 30/09/2026** — `PaymentValidationService.php` (única frontera con el proveedor: `registrarIntento()`/`procesarIntento()`);
+- `src/services/`: `ProductoService.php`, `PedidoService.php` (coordina disponibilidad y validación comercial — centralizada en `PedidoService::validarCarrito()` —, aplica el vencimiento del primer período, cancela Pedidos, ejecuta la tercera validación, el inicio real de pago con fase A/B, la aceptación de corrección y la aplicación de los resultados del proveedor — `aplicarAprobado()`/`aplicarRechazado()` —, e inicia/confirma/reenvía la verificación de email como consumidor del mecanismo — componiendo el email y delegando su transporte en `EmailSender` (canal `log` desde el 03/10/2026)), `EmailVerificationService.php` (mecanismo genérico, agnóstico de contexto, sin envío de emails) y — **desde el 30/09/2026** — `PaymentValidationService.php` (única frontera con el proveedor: `registrarIntento()`/`procesarIntento()`);
 - `src/repositories/`: `ProductoRepository.php` (incluye `bloquearPorIds()` y `descontarStock()`), `PedidoRepository.php` (aquí vive todo el SQL, incluido `SELECT ... FOR UPDATE` de `productos` y de `pedidos`, más `vencerPrimerPeriodoVencidos()`, `buscarItemsPorPedido()`, `cantidadesComprometidasPorProducto()` con exclusión opcional de un `Pedido` y `insertarPedido()` con `email_verificacion_id` heredado), `EmailVerificationRepository.php` y — **desde el 30/09/2026** — `PagoRepository.php` (pagos, `validaciones_pagos`, proveedores y casos de revisión);
 - `src/config/database.php`: conexión PDO actual con configuración **hardcodeada**;
+- `src/config/email.php`: configuración específica del canal de email (`channel = log`) — **nuevo desde el 03/10/2026**; `src/mail/EmailSender.php` y `src/mail/LogEmailSender.php`: contrato genérico de transporte de email y canal `log` (DEV/MVP) — **nuevos desde el 03/10/2026**;
 - `src/models/PaymentValidationResult.php`, `src/payments/PaymentProvider.php`, `src/payments/DummyPaymentProvider.php` y `src/payments/PaymentProviderException.php` (nuevos desde el 30/09/2026); `src/database/` y `storage/logs/` existen pero siguen **vacíos**;
 - sin `composer.json`/autoloader, sin `.env`, sin migraciones `.sql` ni tests.
 
@@ -116,20 +121,20 @@ El diseño técnico no debe intentar implementar desde el comienzo todas las fun
 
 **Todavía no están implementados** (en este proyecto backend, salvo lo indicado):
 
-- canal de email `log` de DEV (**decisión cerrada el 02/10/2026**, ver la decisión más abajo en esta sección): hoy DEV **no dispone de transporte real de correo** (`mail()` sin MTA: el enlace queda registrado en el `error_log` de Apache y `last_sent_at` no se actualiza, por lo que `POST /api/email-verificaciones/reenvio` responde `502 error_envio_email` y el cooldown nunca se activa; sin SMTP/APIs/credenciales) — el canal `log` está decisiónado como estrategia formal de desarrollo y **todavía no está implementado**;
+- ~~canal de email `log` de DEV~~ **RESUELTO e implementado el 03/10/2026** (decisión del 02/10/2026, ver la decisión más abajo en esta sección): `EmailSender`/`LogEmailSender` en `src/mail/`, `src/config/email.php` y selección/inyección en `public/index.php`; el enlace queda registrado en el `error_log` de Apache, la entrega se considera exitosa y `last_sent_at` se registra, por lo que `POST /api/email-verificaciones/reenvio` opera con su cooldown (`200 reenviado` / `429 cooldown_activo`); sin SMTP/APIs/credenciales, `mail()` ya no se invoca;
 - canal de envío real del email de verificación: **requisito pendiente antes de dar por terminado el MVP** (hoy no existe; el mecanismo concreto — SMTP, proveedor u otro — se definirá al preparar el entorno final);
 - recuperación de pedidos pendientes (el paso `PEND_VERIF → PEND_PAGO` por verificación de email, la cancelación voluntaria, el vencimiento del primer período, la tercera validación con corrección/aceptación y el **inicio real de pago con `DummyPaymentProvider`** — creación de `Pago`, `PROCESANDO_PAGO` y aplicación de `APROBADO`/`RECHAZADO`/`EN_PROCESO` con afectación de stock — **están implementados** desde el 30/09/2026);
 - Store y carrito (corresponden al frontend, `D:\Incancelables Web`; el backend no los persiste);
 - administración;
-- configuración por entorno (`.env`) — incluye la elección del canal de email por entorno (DEV `log` vs. canal real), que debe resolverse por configuración.
+- configuración por entorno (`.env`) — la elección del canal de email por entorno ya se resuelve por configuración desde el 03/10/2026 (`src/config/email.php`, con canal `log` activo); falta el `.env`/configuración general por entorno.
 
 **Decisión (02/10/2026) — canales de email por entorno:** la entrega del email de verificación queda con separación explícita entre desarrollo y MVP/producción.
 
-- **DEV — canal de email por log:** durante el desarrollo se utiliza un canal de log que genera el token real, persiste únicamente su hash, construye el enlace real de verificación y **lo registra en log** para poder recuperarlo durante las pruebas; el canal DEV **considera la entrega exitosa sin ejecutar un envío SMTP real** y, por lo tanto, **registra `last_sent_at`**. Debe permitir probar realmente: validación del token, transición `PEND_VERIF → PEND_PAGO`, reenvío, rotación del token, cooldown, `200 reenviado` y `429 cooldown_activo`. Es **exclusivamente infraestructura de desarrollo** y **no reemplaza** el envío real requerido para el MVP final. *(Estado actual: DEV no dispone de transporte real de correo — sin MTA, `mail()` devuelve `false`, el enlace queda en el `error_log` de Apache y `last_sent_at` no se actualiza; el canal `log` está decisiónado y **pendiente de implementar**.)*
+- **DEV — canal de email por log:** durante el desarrollo se utiliza un canal de log que genera el token real, persiste únicamente su hash, construye el enlace real de verificación y **lo registra en log** para poder recuperarlo durante las pruebas; el canal DEV **considera la entrega exitosa sin ejecutar un envío SMTP real** y, por lo tanto, **registra `last_sent_at`**. Debe permitir probar realmente: validación del token, transición `PEND_VERIF → PEND_PAGO`, reenvío, rotación del token, cooldown, `200 reenviado` y `429 cooldown_activo`. Es **exclusivamente infraestructura de desarrollo** y **no reemplaza** el envío real requerido para el MVP final. *(Estado actual: implementado y verificado el 03/10/2026 — `EmailSender`/`LogEmailSender`, `src/config/email.php` y composition root en `public/index.php`; el enlace queda en el `error_log` de Apache, la entrega se considera exitosa y `last_sent_at` se registra. DEV sigue sin transporte real de correo — sin MTA, SMTP, APIs ni credenciales; `mail()` ya no se invoca.)*
 - **MVP / producción — canal real de envío:** antes de considerar terminado el MVP del E-Commerce deberá existir un **canal real de envío de email**. El mecanismo concreto (SMTP, proveedor u otro canal apropiado) se definirá e implementará cuando corresponda preparar el entorno final. **El proyecto no debe considerarse terminado para MVP/producción si la verificación de email depende de leer manualmente un log.**
 - **Configuración, no lógica de negocio:** la arquitectura y la configuración deben distinguir el canal de desarrollo del canal real **sin cambiar la lógica de negocio de verificación**; `last_sent_at` representa una entrega exitosa **según el canal configurado**.
 
-> *(Sólo actualización documental: no se implementó código, configuración, base de datos, migraciones, frontend ni pruebas.)*
+> *(Actualización documental del 02/10/2026; el canal `log` se implementó y verificó el 03/10/2026, ver el bloque 8 y la sección 2.1.)*
 
 > Los cambios de modelo se aplicaron directamente sobre MariaDB: el proyecto **no contiene archivos `.sql` ni migraciones versionadas**. Esta auditoría fue de solo lectura y **no modificó código, base de datos, configuración ni dependencias**.
 
@@ -523,7 +528,7 @@ La lógica de verificación existe en el backend histórico (`D:\Incancelables B
 - fechas/horas (`expires_at`, cooldown) calculadas en SQL (`NOW()`, `DATE_ADD`, `TIMESTAMPDIFF`) porque la timezone de MariaDB difiere de la de PHP;
 - pruebas: 20/20 OK (creación, hash, expiración, cooldown, rotación de token, transición, stock intacto, fallo de envío sin rollback, regresión de los bloques 1 y 2); base limpia al finalizar (`pedidos`, `pedidos_items` y `emails_verificaciones` en 0; 6 productos).
 
-**Pendientes dentro del bloque:** (1) canal de email `log` de DEV (**decisión cerrada el 02/10/2026**: canal de infraestructura de desarrollo que registra el enlace en log, considera la entrega exitosa y registra `last_sent_at`, sin envío SMTP real; pendiente de implementar); (2) entrega real del email (canal SMTP u otro; **requisito para dar por terminado el MVP**); (3) URL, asunto y plantilla definitivos del checkout (variante mínima en uso: asunto "Confirmá tu compra en Incancelables", URL `https://xb3nderx.github.io/incancelablesWeb/pages/resultado.html?flow=checkout&token=...`, a confirmar con el frontend).
+**Pendientes dentro del bloque:** (1) ~~canal de email `log` de DEV~~ **RESUELTO e implementado el 03/10/2026** (decisión cerrada el 02/10/2026: canal de infraestructura de desarrollo que registra el email en `error_log`, considera la entrega exitosa y registra `last_sent_at`, sin envío SMTP real); (2) entrega real del email (canal SMTP u otro; **requisito para dar por terminado el MVP**); (3) URL, asunto y plantilla definitivos del checkout (variante mínima en uso: asunto "Confirmá tu compra en Incancelables", URL `https://xb3nderx.github.io/incancelablesWeb/pages/resultado.html?flow=checkout&token=...`, a confirmar con el frontend).
 
 Decisiones cerradas del mecanismo (ver `ECOMMERCE_DESIGN.md`, sección 11.1, y `ECOMMERCE_TECHNICAL_DESIGN.md`, sección 15):
 
@@ -697,7 +702,7 @@ Estados terminales normales: `PAGADO`, `NO_PAGADO`.
 Afectan disponibilidad: `PEND_VERIF`, `PEND_PAGO`, `PROCESANDO_PAGO`.
 NO afectan disponibilidad: `PAGADO`, `NO_PAGADO`.
 
-La duración del primer período (**valor inicial: 10 minutos**, parametrizable y de fácil ajuste), la duración del segundo período, `PAGO_MAX_INTENTOS` y `PAGO_MAX_ESPERA_CONCILIACION` están definidos como **parámetros parametrizables**: los valores se cargan en configuración (no son pendientes de diseño).
+La duración del primer período (**valor inicial de diseño: 10 minutos**; **valor operativo actual: 40 minutos** desde el 03/10/2026 — ajuste operativo no definitivo, parámetro configurable —, parametrizable y de fácil ajuste), la duración del segundo período, `PAGO_MAX_INTENTOS` y `PAGO_MAX_ESPERA_CONCILIACION` están definidos como **parámetros parametrizables**: los valores se cargan en configuración (no son pendientes de diseño).
 
 Ver detalle completo en `ECOMMERCE_DESIGN.md` (sección 8).
 
@@ -1148,12 +1153,16 @@ D:\Incancelables E-Commerce
 │   └── api.php            → rutas: GET /api/productos, POST /api/pedidos, POST /api/email-verificaciones/validar, POST /api/email-verificaciones/reenvio
 ├── src
 │   ├── config
-│   │   └── database.php   → conexión PDO actual (configuración hardcodeada)
+│   │   ├── database.php   → conexión PDO actual (configuración hardcodeada)
+│   │   └── email.php      → configuración del canal de email (channel = log)
 │   ├── controllers
 │   │   ├── ProductoController.php
 │   │   ├── PedidoController.php
 │   │   └── EmailVerificationController.php
 │   ├── database           → vacío
+│   ├── mail
+│   │   ├── EmailSender.php     → contrato genérico de transporte de email
+│   │   └── LogEmailSender.php  → canal log (DEV/MVP)
 │   ├── models             → vacío
 │   ├── repositories
 │   │   ├── ProductoRepository.php        → SQL del catálogo (incluye SELECT ... FOR UPDATE)
@@ -1286,7 +1295,7 @@ La implementación deberá contemplar:
 - disponibilidad y stock (cálculo en caliente, sin reservas);
 - carrito unificado;
 - checkout *(implementado y verificado el 29/09/2026)*;
-- verificación de email *(implementado y verificado el 29/09/2026; falta el canal `log` de DEV — decisión del 02/10/2026 — y el canal real de envío)*;
+- verificación de email *(implementado y verificado el 29/09/2026; canal `log` de DEV implementado el 03/10/2026 — decisión del 02/10/2026 —; sigue pendiente el canal real de envío)*;
 - corrección del carrito con aceptación/sustitución, cancelación voluntaria y vencimiento del primer período *(implementado y verificado el 30/09/2026)*;
 - procesamiento del pago *(implementado y verificado el 30/09/2026: `DummyPaymentProvider` + `PaymentValidationService` + `PagoRepository`, con creación de `Pago`, transición a `PROCESANDO_PAGO`, aplicación de `APROBADO`/`RECHAZADO`/`EN_PROCESO` y afectación de stock; quedan POST-MVP el webhook/`MercadoPagoProvider` y el segundo período automatizado)*;
 - creación del pedido al iniciar el checkout y su ciclo de vida;
@@ -1336,11 +1345,13 @@ token incorrecto → rechazo
 
 **Ejecutado parcialmente el 30/09/2026** (18/18 OK, enfoque de servicio + 5 aserciones HTTP) con la corrección N:1: un solo `Pedido` vigente → `PEND_PAGO` con `pedidos[]` de 1 elemento; una misma verificación con 4 `Pedido` (vigente → `PEND_PAGO`, vencido → `NO_PAGADO`, `PEND_PAGO` y `NO_PAGADO` intactos); repetición del token → `confirmado` con `pedidos: []` (idempotencia, estados sin cambios); verificación sin `Pedido` → `confirmado` con `pedidos: []`; token inválido → rechazo; límites 9 minutos (vigente) y 11 minutos (vencido); contrato HTTP `200` con `pedidos[]` y sin campo `pedido` singular + `400` ante cuerpo sin token. Limpieza verificada contra baseline (`pedidos`, `pedidos_items` y `emails_verificaciones` vacíos; 6 productos).
 
+**Ejecutado el 03/10/2026** con el canal de email `log` implementado: creación de `Pedido` en `PEND_VERIF` con el email y el enlace registrados en `error_log` por `LogEmailSender` y `last_sent_at` escrito (hoy sí se registra, a diferencia del estado anterior sin MTA); reenvío bajo cooldown → `429 cooldown_activo`; tras el cooldown → `200 reenviado` con rotación de token (token anterior → `400 token_invalido`); token nuevo → `200 confirmado` con `verified_at` y `PEND_VERIF → PEND_PAGO`; reutilización del token confirmado → `200 confirmado` con `pedidos: []` (idempotencia). Durante las pruebas se ajustó operativamente el primer período a **40 minutos** (parámetro no definitivo) para que el `Pedido` no venzca antes del primer reenvío.
+
 Quedan pendientes una verificación expirada generada en tiempo real (la expiración se probó con fixture de `expires_at`); el caso "pedido sin verificación → no se inicia el pago" **ya está cubierto y probado** desde el 30/09/2026 (`iniciar_pago` sobre un `Pedido` en `PEND_VERIF` responde `409 pedido_no_pendiente_de_pago`; ver sección 14).
 
 ### Vencimiento, cancelación e inicio de pago
 
-Probar (primer período de 10 minutos, `PEND_VERIF`/`PEND_PAGO`):
+Probar (primer período con su duración parametrizada — **10 minutos** en la ejecución del 30/09/2026 y **40 minutos** operativos desde el 03/10/2026, ajuste no definitivo; ver sección 2.1 —, `PEND_VERIF`/`PEND_PAGO`):
 
 ```text
 pedido vencido → NO_PAGADO y 409 pedido_vencido en cancelar/pago/reenvio
@@ -1610,24 +1621,25 @@ Secuencia prevista del trabajo inmediato (actualizada el 30/09/2026; la implemen
 Bloques implementados y verificados: GET /api/productos, POST /api/pedidos,
 verificación de email (validar + reenvio), rutas {id}, vencimiento del
 primer período, POST /api/pedidos/{id}/cancelar,
-POST /api/pedidos/{id}/pago y bloque de pagos con DummyPaymentProvider
+POST /api/pedidos/{id}/pago, bloque de pagos con DummyPaymentProvider
+y canal de email `log` de DEV (03/10/2026)
         ↓
 Detalle técnico e implementación incremental del resto del MVP
-(recuperación; canal de email por log en DEV; entrega real del email)
+(recuperación; entrega real del email)
         ↓
 ETAPA 3 — IMPLEMENTACIÓN DEL MVP (continuada incrementalmente)
 ```
 
 En esta etapa se deberá completar la definición técnica necesaria para continuar la implementación funcional.
 
-Se deberá definir (los puntos marcados ya están resueltos para los siete bloques implementados):
+Se deberá definir (los puntos marcados ya están resueltos para los ocho bloques implementados):
 
 - API y endpoints *(parcial: `GET /api/productos`, `POST /api/pedidos`, los dos endpoints de verificación de email, `POST /api/pedidos/{id}/cancelar` y `POST /api/pedidos/{id}/pago` definidos e implementados; resto pendiente)*;
 - controllers, models y services *(parcial: `ProductoController`/`PedidoController`/`EmailVerificationController`, `ProductoService`/`PedidoService`/`EmailVerificationService`/`PaymentValidationService` y `PaymentValidationResult` implementados; models/entities restantes y servicios pendientes)*;
 - flujo técnico del carrito (decidido: exclusivamente frontend en `sessionStorage`);
 - flujo del checkout, validación comercial y corrección de carrito *(parcial: creación del `Pedido` con validación comercial en transacción y corrección con aceptación/sustitución implementadas; flujo de carrito frontend y recuperación pendientes)*;
 - detalle técnico de la recuperación de pedidos pendientes;
-- **detalle de implementación de la verificación de email** (**cerrado, implementado y verificado** el 29/09/2026: estructura de `emails_verificaciones` con `last_sent_at`, responsabilidades del servicio, separación de responsabilidades y contrato HTTP; ver `ECOMMERCE_TECHNICAL_DESIGN.md`, secciones 15 y 15.4; pendientes del bloque: canal de email `log` de DEV (decisión del 02/10/2026), canal de envío real y URL/asunto/plantilla definitivos);
+- **detalle de implementación de la verificación de email** (**cerrado, implementado y verificado** el 29/09/2026: estructura de `emails_verificaciones` con `last_sent_at`, responsabilidades del servicio, separación de responsabilidades y contrato HTTP; ver `ECOMMERCE_TECHNICAL_DESIGN.md`, secciones 15 y 15.4; pendientes del bloque: canal de envío real y URL/asunto/plantilla definitivos (el canal de email `log` de DEV — decisión del 02/10/2026 — está implementado desde el 03/10/2026);
 - ~~detalle técnico de los pagos del MVP~~ (**cerrado e implementado y verificado** el 30/09/2026: frontera `PaymentValidationService → PaymentProvider → DummyPaymentProvider`, `PagoRepository`, creación de `Pago`, transición a `PROCESANDO_PAGO`, aplicación de resultados con afectación de stock e idempotencia; la integración real con Mercado Pago es POST-MVP);
 - manejo del stock y de la disponibilidad *(parcial: disponibilidad en caliente, vencimiento del primer período y descuento de stock con pago aprobado implementados; falta sólo el frontend/carrito)*;
 - creación y confirmación del pedido *(parcial: creación, verificación `PEND_VERIF → PEND_PAGO`, cancelación voluntaria, vencimiento, 3.ª validación e inicio/aplicación del pago con `DummyPaymentProvider` implementados; falta la confirmación post-compra/email y la recuperación)*;
@@ -1678,12 +1690,12 @@ ETAPA 3 — IMPLEMENTACIÓN DEL MVP
 - responsabilidades del servicio de verificación: hash SHA-256 del token (token aleatorio de 256 bits, sólo en claro hacia el consumidor), expiración (referencia 7 días), cooldown (referencia 15 minutos, sobre `last_sent_at`), **rotación del token en cada reenvío permitido** (el anterior queda inválido; sin reutilizar el vigente; lógica interna; el consumidor no elige la operación), validación, registro de `verified_at` y devolución del resultado;
 - inicio de la verificación dentro de `POST /api/pedidos` (opción A) después del `COMMIT`, con fallo de envío ≠ rollback del `Pedido`; endpoints `POST /api/email-verificaciones/validar` y `POST /api/email-verificaciones/reenvio` con su contrato HTTP (ver `ECOMMERCE_TECHNICAL_DESIGN.md`, sección 15.4); **no existe** `POST /api/email-verificaciones` (solicitud); transición `PEND_VERIF → PEND_PAGO` a cargo de `PedidoService`, sin nueva comprobación de stock; desde el 30/09/2026 la confirmación es N:1 — procesa **todos** los `Pedido` asociados (vigentes → `PEND_PAGO`, vencidos → `NO_PAGADO`, resto intactos) y responde `pedidos[]`;
 - separación de responsabilidades: el mecanismo no envía emails (cada consumidor envía el suyo; en el MVP `PedidoService` envía el email de verificación del checkout), el mecanismo registra `verified_at` en la confirmación y el consumidor decide la acción de negocio (sin callbacks ni eventos);
-- canales de email por entorno (**decisión cerrada el 02/10/2026**): **DEV** con **canal `log`** (token real, sólo hash persistido, enlace real registrado en log para las pruebas, entrega considerada exitosa sin transporte SMTP y por lo tanto con registro de `last_sent_at`; infraestructura de desarrollo que no reemplaza el envío real) y **MVP/producción** con **canal real de envío** obligatorio antes de cerrar el proyecto (**no** se termina el MVP si la verificación depende de leer manualmente un log), distinguidos **mediante configuración** y sin cambiar la lógica de negocio de verificación.
+- canales de email por entorno (**decisión cerrada el 02/10/2026**): **DEV** con **canal `log`** (token real, sólo hash persistido, enlace real registrado en log para las pruebas, entrega considerada exitosa sin transporte SMTP y por lo tanto con registro de `last_sent_at`; infraestructura de desarrollo que no reemplaza el envío real) y **MVP/producción** con **canal real de envío** obligatorio antes de cerrar el proyecto (**no** se termina el MVP si la verificación depende de leer manualmente un log), distinguidos **mediante configuración** y sin cambiar la lógica de negocio de verificación (**implementado el 03/10/2026** para el canal `log`: `src/mail/EmailSender.php`/`LogEmailSender.php`, `src/config/email.php` y selección/inyección en `public/index.php`; el canal real sigue pendiente).
 
 ### PENDIENTE DE DEFINICIÓN
 
 - ~~detalle de la API para los endpoints restantes (`POST /api/pedidos/{id}/pago` y `POST /api/pedidos/{id}/cancelar`)~~ **RESUELTO el 30/09/2026**: ambos endpoints están implementados y verificados con su contrato HTTP — incluido el bloque de pagos de `POST /api/pedidos/{id}/pago` (`proveedor_id`, creación de `Pago`, transición a `PROCESANDO_PAGO` y resultados del proveedor) — (ver secciones 11 y 14 de este documento y `ECOMMERCE_TECHNICAL_DESIGN.md`, secciones 17.2, 19.4 y 21);
-- asunto, plantilla y URL definitivos del email de verificación del checkout (lo envía el consumidor, `PedidoService`; el mecanismo no define su contenido; variante mínima en uso: asunto "Confirmá tu compra en Incancelables" y URL `https://xb3nderx.github.io/incancelablesWeb/pages/resultado.html?flow=checkout&token=...`, a confirmar con el frontend) y canal de envío real del email (**requisito para dar por terminado el MVP**; hoy DEV no tiene transporte de correo: `mail()` sin MTA, con el enlace en el `error_log` de Apache). El canal de email `log` de DEV ya está **decisiónado** (02/10/2026): falta definir su detalle concreto (dónde registra el enlace y cómo se configura el canal) e implementarlo;
+- asunto, plantilla y URL definitivos del email de verificación del checkout (lo envía el consumidor, `PedidoService`; el mecanismo no define su contenido; variante mínima en uso: asunto "Confirmá tu compra en Incancelables" y URL `https://xb3nderx.github.io/incancelablesWeb/pages/resultado.html?flow=checkout&token=...`, a confirmar con el frontend) y canal de envío real del email (**requisito para dar por terminado el MVP**; hoy la entrega en DEV/MVP funciona con el canal `log` — `mail()` ya no se invoca —, pero no existe transporte real); ~~el canal de email `log` de DEV~~ **RESUELTO e implementado el 03/10/2026**: detalle cerrado y aplicado — registra el email compuesto (destinatario, asunto, cuerpo y enlace) en `error_log` vía `LogEmailSender`, canal elegido por `src/config/email.php` y composition root en `public/index.php`;
 - detalle técnico del carrito frontend y de la recuperación de pedidos pendientes (la creación del `Pedido`, la corrección con aceptación/sustitución, la cancelación y la 3.ª validación ya están definidas e implementadas);
 - ~~detalle de implementación de `DummyPaymentProvider`~~ **RESUELTO el 30/09/2026** (simula `APROBADO` por defecto o el resultado `simulacion` del request — `RECHAZADO`/`EN_PROCESO` — con `referencia_proveedor = DUMMY-{pagoId}`; los tres resultados atraviesan todo el flujo punta a punta);
 - seguridad y CORS;
@@ -1696,10 +1708,10 @@ ETAPA 3 — IMPLEMENTACIÓN DEL MVP
 
 - el resto de la capa de aplicación: recuperación de pedidos pendientes, models/entities restantes y administración *(ya implementados y verificados: front controller con rutas `{id}`, routing, `ProductoController`/`PedidoController`/`EmailVerificationController`, `ProductoService`/`PedidoService`/`EmailVerificationService`/`PaymentValidationService`, `ProductoRepository`/`PedidoRepository`/`PagoRepository`/`EmailVerificationRepository`, `PaymentValidationResult` + `PaymentProvider`/`DummyPaymentProvider`/`PaymentProviderException`, endpoints `GET /api/productos`, `POST /api/pedidos`, `POST /api/email-verificaciones/validar`, `POST /api/email-verificaciones/reenvio`, `POST /api/pedidos/{id}/cancelar` y `POST /api/pedidos/{id}/pago` con el bloque de pagos completo; además, vencimiento del primer período y corrección con aceptación/sustitución)*;
 - ~~revisar el comportamiento de `PedidoRepository::buscarPorEmailVerificacion()` (devuelve **un solo** `Pedido`, pero una misma verificación puede ser reutilizada por varios `Pedido`)~~ **RESUELTO el 30/09/2026**: método reemplazado por `buscarTodosPorEmailVerificacion()` (todos los `Pedido` asociados, `ORDER BY p.id`, con `created_at` y `NOW()`); confirmación N:1 completa (vigentes → `PEND_PAGO`, vencidos → `NO_PAGADO`, resto intacto, respuesta `pedidos[]`);
-- canal de email `log` de DEV (**decisión cerrada el 02/10/2026**; pendiente de implementar: canal de desarrollo que registra el enlace en log, considera la entrega exitosa y registra `last_sent_at`, sin envío SMTP real; habilita las pruebas de reenvío, rotación, cooldown, `200 reenviado` y `429 cooldown_activo`);
-- entrega real del email de verificación (canal SMTP u otro; **requisito para dar por terminado el MVP**; hoy en DEV `mail()` falla sin MTA y el enlace queda en el `error_log` de Apache; `last_sent_at` sólo se escribe cuando la entrega, según el canal configurado, tiene éxito);
+- ~~canal de email `log` de DEV~~ **RESUELTO e implementado el 03/10/2026** (decisión cerrada el 02/10/2026; canal de desarrollo que registra el email compuesto en `error_log`, considera la entrega exitosa y registra `last_sent_at`, sin envío SMTP real): `src/mail/EmailSender.php` (contrato `enviar(para, asunto, cuerpo): bool`), `src/mail/LogEmailSender.php` (canal `log`), `src/config/email.php` (`channel = log`) y selección/inyección en `public/index.php`; habilita y verificó las pruebas de reenvío, rotación, cooldown, `200 reenviado` y `429 cooldown_activo`;
+- entrega real del email de verificación (canal SMTP u otro; **requisito para dar por terminado el MVP**; hoy en DEV/MVP la entrega funciona por el canal `log` — `mail()` ya no se invoca, sin MTA/SMTP/APIs/credenciales — y `last_sent_at` sólo se escribe cuando la entrega, según el canal configurado, tiene éxito);
 - flujo completo de pago y confirmación (la creación del `Pedido`, la verificación de email con transición `PEND_VERIF → PEND_PAGO`, la cancelación voluntaria, el vencimiento del primer período, la corrección con aceptación y el **inicio/aplicación del pago con `DummyPaymentProvider`** ya están implementados; falta la confirmación post-compra con email y la recuperación);
-- configuración por entorno (hoy `src/config/database.php` tiene la configuración de la base **hardcodeada**; no existe `.env`; incluye la selección del canal de email por entorno — DEV `log` vs. canal real —, que debe resolverse por configuración);
+- configuración por entorno (hoy `src/config/database.php` tiene la configuración de la base **hardcodeada** y `src/config/email.php` define el canal de email — `channel = log`, implementado el 03/10/2026 —; no existe `.env`; la conmutación al canal real deberá resolverse por esa misma configuración);
 - ~~idempotencia y trazabilidad de las interacciones con el proveedor~~ **RESUELTO e implementado el 30/09/2026** (verificado en las suites del bloque de pagos; webhook POST-MVP);
 - email post-pago.
 
