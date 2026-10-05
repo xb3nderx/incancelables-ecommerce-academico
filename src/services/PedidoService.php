@@ -18,7 +18,6 @@ final class PedidoService
     private const PRIMER_PERIODO_MINUTOS = 40;
     private const PAGO_MAX_INTENTOS = 3;
     private const RESULTADOS_SIMULACION = ['APROBADO', 'RECHAZADO', 'EN_PROCESO'];
-    private const URL_BASE_VERIFICACION = 'https://xb3nderx.github.io/incancelablesWeb/pages/resultado.html?flow=checkout';
 
     public function __construct(
         private ProductoRepository $productoRepository,
@@ -27,6 +26,7 @@ final class PedidoService
         private PagoRepository $pagoRepository,
         private PaymentValidationService $paymentValidationService,
         private EmailSender $emailSender,
+        private string $urlVerificacionCheckout,
     ) {
     }
 
@@ -835,7 +835,7 @@ final class PedidoService
 
     private function enviarEmailVerificacion(string $email, string $token): bool
     {
-        $enlace = self::URL_BASE_VERIFICACION . '&token=' . urlencode($token);
+        $enlace = $this->urlVerificacionCheckout . '?flow=checkout&token=' . urlencode($token);
 
         $asunto = 'Confirmá tu compra en Incancelables';
 

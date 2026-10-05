@@ -57,6 +57,13 @@ try {
         throw new RuntimeException('Canal de email desconocido: ' . var_export($emailChannel, true));
     }
 
+    $configFrontend = require __DIR__ . '/../src/config/frontend.php';
+    $urlVerificacionCheckout = $configFrontend['url_verificacion_checkout'] ?? null;
+
+    if (!is_string($urlVerificacionCheckout) || trim($urlVerificacionCheckout) === '') {
+        throw new RuntimeException('URL de verificación de checkout inválida: ' . var_export($urlVerificacionCheckout, true));
+    }
+
     $productoRepository = new \Incancelables\Repositories\ProductoRepository($pdo);
     $pedidoRepository = new \Incancelables\Repositories\PedidoRepository($pdo);
     $emailVerificationRepository = new \Incancelables\Repositories\EmailVerificationRepository($pdo);
@@ -74,6 +81,7 @@ try {
         $pagoRepository,
         $paymentValidationService,
         $emailSender,
+        $urlVerificacionCheckout,
     );
 
     $controladores = [
