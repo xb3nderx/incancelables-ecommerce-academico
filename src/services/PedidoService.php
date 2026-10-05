@@ -17,7 +17,7 @@ final class PedidoService
     private const ESTADOS_ACTIVOS_CHECKOUT = ['PEND_VERIF', 'PEND_PAGO'];
     private const PRIMER_PERIODO_MINUTOS = 40;
     private const PAGO_MAX_INTENTOS = 3;
-    private const RESULTADOS_SIMULACION = ['APROBADO', 'RECHAZADO', 'EN_PROCESO'];
+    private const RESULTADOS_SIMULACION = ['APROBADO', 'RECHAZADO'];
 
     public function __construct(
         private ProductoRepository $productoRepository,

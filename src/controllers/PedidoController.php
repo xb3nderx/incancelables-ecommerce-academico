@@ -111,7 +111,7 @@ final class PedidoController
             }
 
             if (array_key_exists('simulacion', $datos)) {
-                if (!is_string($datos['simulacion']) || !in_array($datos['simulacion'], ['APROBADO', 'RECHAZADO', 'EN_PROCESO'], true)) {
+                if (!is_string($datos['simulacion']) || !in_array($datos['simulacion'], ['APROBADO', 'RECHAZADO'], true)) {
                     responder(400, ['error' => 'simulacion inválida']);
                 }
 
