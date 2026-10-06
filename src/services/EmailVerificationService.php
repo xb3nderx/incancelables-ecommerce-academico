@@ -96,6 +96,16 @@ final class EmailVerificationService
         ];
     }
 
+    /**
+     * Consulta SOLO LECTURA del registro de verificación a partir del token.
+     * No marca ni modifica nada: existe para autorizar la continuación de la
+     * compra (Pedido + PedidoItem como fuente de verdad) sin efectos secundarios.
+     */
+    public function consultarPorToken(string $token): ?array
+    {
+        return $this->emailVerificationRepository->buscarPorTokenHash(hash('sha256', $token));
+    }
+
     public function registrarEnvio(int $emailVerificacionId): void
     {
         $this->emailVerificationRepository->registrarEnvio($emailVerificacionId);

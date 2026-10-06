@@ -224,6 +224,39 @@ final class PedidoService
         ];
     }
 
+    /**
+     * Consulta SOLO LECTURA: devuelve los Pedidos asociados a la verificación
+     * del token (con sus items) para continuar la compra sin depender del
+     * estado del frontend. No valida ni modifica la verificación.
+     */
+    public function obtenerPedidosPorToken(string $token): array
+    {
+        $registro = $this->emailVerificationService->consultarPorToken($token);
+
+        if ($registro === null) {
+            return ['resultado' => 'error', 'error' => 'token_invalido'];
+        }
+
+        if ($registro['expirado']) {
+            return ['resultado' => 'error', 'error' => 'token_expirado'];
+        }
+
+        if (!$registro['verificado']) {
+            return ['resultado' => 'error', 'error' => 'verificacion_pendiente'];
+        }
+
+        $pedidos = [];
+        foreach ($this->pedidoRepository->buscarTodosPorEmailVerificacion($registro['id']) as $pedido) {
+            $pedidos[] = [
+                'id' => (int) $pedido['id'],
+                'estado' => $pedido['estado'],
+                'items' => $this->pedidoRepository->buscarItemsPorPedido((int) $pedido['id']),
+            ];
+        }
+
+        return ['resultado' => 'ok', 'pedidos' => $pedidos];
+    }
+
     public function cancelarPedido(int $pedidoId): array
     {
         $this->pedidoRepository->iniciarTransaccion();

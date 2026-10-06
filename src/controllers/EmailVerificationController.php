@@ -41,6 +41,40 @@ final class EmailVerificationController
         responder(400, ['error' => $resultado['resultado']]);
     }
 
+    public function pedidos(): void
+    {
+        $datos = $this->leerCuerpo();
+
+        if (!is_array($datos)) {
+            responder(400, ['error' => 'Cuerpo JSON inválido']);
+        }
+
+        if (!array_key_exists('token', $datos)) {
+            responder(400, ['error' => 'Falta el campo token']);
+        }
+
+        if (!is_string($datos['token']) || trim($datos['token']) === '' || strlen($datos['token']) > 255) {
+            responder(400, ['error' => 'token inválido']);
+        }
+
+        $resultado = $this->pedidoService->obtenerPedidosPorToken(trim($datos['token']));
+
+        if ($resultado['resultado'] === 'ok') {
+            responder(200, [
+                'resultado' => 'ok',
+                'pedidos' => $resultado['pedidos'],
+            ]);
+        }
+
+        $errores = [
+            'token_invalido' => 400,
+            'token_expirado' => 400,
+            'verificacion_pendiente' => 409,
+        ];
+
+        responder($errores[$resultado['error']] ?? 500, ['error' => $resultado['error']]);
+    }
+
     public function reenvio(): void
     {
         $datos = $this->leerCuerpo();
