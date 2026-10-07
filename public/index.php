@@ -53,6 +53,37 @@ try {
 
     if ($emailChannel === 'log') {
         $emailSender = new \Incancelables\Mail\LogEmailSender();
+    } elseif ($emailChannel === 'resend') {
+        $resendConfig = $configEmail['resend'] ?? null;
+        $resendConfig = is_array($resendConfig) ? $resendConfig : [];
+
+        $emailApiKey = $resendConfig['api_key'] ?? null;
+        $emailFrom = $resendConfig['from'] ?? null;
+        $emailEndpoint = $resendConfig['endpoint'] ?? null;
+        $emailTimeout = $resendConfig['timeout'] ?? null;
+
+        if (!is_string($emailApiKey) || trim($emailApiKey) === '') {
+            throw new RuntimeException('Canal de email resend sin api_key configurada');
+        }
+
+        if (!is_string($emailFrom) || trim($emailFrom) === '') {
+            throw new RuntimeException('Canal de email resend sin remitente (from) configurado: ' . var_export($emailFrom, true));
+        }
+
+        if (!is_string($emailEndpoint) || trim($emailEndpoint) === '') {
+            throw new RuntimeException('Canal de email resend con endpoint inválido: ' . var_export($emailEndpoint, true));
+        }
+
+        if (!is_int($emailTimeout) || $emailTimeout <= 0) {
+            throw new RuntimeException('Canal de email resend con timeout inválido: ' . var_export($emailTimeout, true));
+        }
+
+        $emailSender = new \Incancelables\Mail\ResendEmailSender(
+            $emailApiKey,
+            $emailFrom,
+            $emailEndpoint,
+            $emailTimeout,
+        );
     } else {
         throw new RuntimeException('Canal de email desconocido: ' . var_export($emailChannel, true));
     }
