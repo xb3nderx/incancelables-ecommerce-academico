@@ -75,6 +75,66 @@ final class EmailVerificationController
         responder($errores[$resultado['error']] ?? 500, ['error' => $resultado['error']]);
     }
 
+    /**
+     * Reemplazo del Pedido activo de una verificación ya confirmada, autorizado
+     * por el token: valida la estructura del request y delega la operación en
+     * PedidoService (que a su vez delega en el mecanismo de sustitución
+     * existente). El controller no contiene lógica de negocio.
+     */
+    public function reemplazar(): void
+    {
+        $datos = $this->leerCuerpo();
+
+        if (!is_array($datos)) {
+            responder(400, ['error' => 'Cuerpo JSON inválido']);
+        }
+
+        if (!array_key_exists('token', $datos)) {
+            responder(400, ['error' => 'Falta el campo token']);
+        }
+
+        if (!is_string($datos['token']) || trim($datos['token']) === '' || strlen($datos['token']) > 255) {
+            responder(400, ['error' => 'token inválido']);
+        }
+
+        if (!array_key_exists('items', $datos)) {
+            responder(400, ['error' => 'Falta el campo items']);
+        }
+
+        $items = ItemsRequestValidator::validar($datos);
+
+        $resultado = $this->pedidoService->reemplazarPedidoPorToken(trim($datos['token']), $items);
+
+        if ($resultado['resultado'] === 'error') {
+            $this->responderErrorDeReemplazo($resultado);
+        }
+
+        responder(200, $resultado);
+    }
+
+    private function responderErrorDeReemplazo(array $resultado): never
+    {
+        $errores = [
+            'token_invalido' => 400,
+            'token_expirado' => 400,
+            'verificacion_pendiente' => 409,
+            'pedido_no_activo' => 409,
+            'varios_pedidos_activos' => 409,
+            'pedido_inexistente' => 404,
+            'pedido_vencido' => 409,
+            'carrito_vacio' => 400,
+            'accion_invalida' => 400,
+        ];
+
+        $cuerpo = ['error' => $resultado['error']];
+
+        if (isset($resultado['pedido'])) {
+            $cuerpo['pedido'] = $resultado['pedido'];
+        }
+
+        responder($errores[$resultado['error']] ?? 500, $cuerpo);
+    }
+
     public function reenvio(): void
     {
         $datos = $this->leerCuerpo();

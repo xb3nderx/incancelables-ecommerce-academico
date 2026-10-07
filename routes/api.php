@@ -10,4 +10,5 @@ return [
     'POST /api/email-verificaciones/validar' => [\Incancelables\Controllers\EmailVerificationController::class, 'validar'],
     'POST /api/email-verificaciones/reenvio' => [\Incancelables\Controllers\EmailVerificationController::class, 'reenvio'],
     'POST /api/email-verificaciones/pedidos' => [\Incancelables\Controllers\EmailVerificationController::class, 'pedidos'],
+    'POST /api/email-verificaciones/pedidos/reemplazo' => [\Incancelables\Controllers\EmailVerificationController::class, 'reemplazar'],
 ];

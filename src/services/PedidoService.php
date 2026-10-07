@@ -257,6 +257,52 @@ final class PedidoService
         return ['resultado' => 'ok', 'pedidos' => $pedidos];
     }
 
+    /**
+     * Reemplazo del Pedido activo de una verificación ya confirmada,
+     * autorizado por el token (POST /api/email-verificaciones/pedidos/reemplazo).
+     *
+     * Sólo resuelve el Pedido A: toda la operación de sustitución — bloqueo del
+     * Pedido, transición A → NO_PAGADO, revalidación comercial, creación del
+     * Pedido B con sus PedidoItem, herencia de email_verificacion_id y la
+     * conservación del estado (PEND_PAGO) — queda en el mecanismo existente
+     * procesarPago(..., 'aceptar_correccion'), que la ejecuta en una única
+     * transacción. No se crea ninguna otra verificación ni se envía email.
+     */
+    public function reemplazarPedidoPorToken(string $token, array $items): array
+    {
+        $registro = $this->emailVerificationService->consultarPorToken($token);
+
+        if ($registro === null) {
+            return ['resultado' => 'error', 'error' => 'token_invalido'];
+        }
+
+        if ($registro['expirado']) {
+            return ['resultado' => 'error', 'error' => 'token_expirado'];
+        }
+
+        if (!$registro['verificado']) {
+            return ['resultado' => 'error', 'error' => 'verificacion_pendiente'];
+        }
+
+        $activos = [];
+
+        foreach ($this->pedidoRepository->buscarTodosPorEmailVerificacion($registro['id']) as $pedido) {
+            if ($this->estaActivoCheckout($pedido['estado'])) {
+                $activos[] = $pedido;
+            }
+        }
+
+        if ($activos === []) {
+            return ['resultado' => 'error', 'error' => 'pedido_no_activo'];
+        }
+
+        if (count($activos) > 1) {
+            return ['resultado' => 'error', 'error' => 'varios_pedidos_activos'];
+        }
+
+        return $this->procesarPago((int) $activos[0]['id'], 'aceptar_correccion', $items);
+    }
+
     public function cancelarPedido(int $pedidoId): array
     {
         $this->pedidoRepository->iniciarTransaccion();
