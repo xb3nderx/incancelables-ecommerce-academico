@@ -5,8 +5,6 @@ declare(strict_types=1);
 $base = dirname(__DIR__);
 $index = $base . '/public/index.php';
 $archivoConfig = $base . '/src/config/email.php';
-$archivoLocal = $base . '/src/config/email.local.php';
-$archivoEjemplo = $base . '/src/config/email.local.example.php';
 
 require $base . '/src/mail/EmailSender.php';
 require $base . '/src/mail/LogEmailSender.php';
@@ -32,29 +30,82 @@ function check(string $nombre, bool $cond, string $extra = ''): void
     }
 }
 
-function escribirLocal(?string $channel, ?string $apiKey, ?string $from): void
+function escribirPrepend(array $env): string
 {
-    global $archivoLocal;
+    $prepend = sys_get_temp_dir() . '/inc_prepend_canal_' . getmypid() . '_' . bin2hex(random_bytes(4)) . '.php';
+    $contenido = "<?php\n";
 
-    $config = [];
-
-    if ($channel !== null) {
-        $config['channel'] = $channel;
+    foreach ($env as $clave => $valor) {
+        $contenido .= 'putenv(' . var_export($clave . '=' . $valor, true) . ");\n";
+        $contenido .= '$_ENV[' . var_export($clave, true) . '] = ' . var_export($valor, true) . ";\n";
     }
 
-    if ($apiKey !== null || $from !== null) {
-        $config['resend'] = array_filter([
-            'api_key' => $apiKey,
-            'from' => $from,
-        ], static fn (string $valor): bool => $valor !== '');
-    }
+    file_put_contents($prepend, $contenido);
 
-    file_put_contents($archivoLocal, "<?php\n\nreturn " . var_export($config, true) . ";\n");
+    return $prepend;
 }
 
-function ejecutarBootstrap(string $archivoLog): array
+function entornoNeutro(): array
+{
+    return ['EMAIL_CHANNEL' => '', 'RESEND_API_KEY' => '', 'RESEND_FROM' => ''];
+}
+
+function entornoResend(string $canal, string $apiKey, string $from): array
+{
+    return ['EMAIL_CHANNEL' => $canal, 'RESEND_API_KEY' => $apiKey, 'RESEND_FROM' => $from];
+}
+
+function ejecutarProbe(array $env): array
+{
+    $probe = sys_get_temp_dir() . '/inc_probe_canal_' . getmypid() . '_' . bin2hex(random_bytes(4)) . '.php';
+    $prepend = escribirPrepend($env);
+
+    file_put_contents(
+        $probe,
+        '<?php' . "\n"
+        . '$config = require ' . var_export(dirname(__DIR__) . '/src/config/email.php', true) . ";\n"
+        . 'echo json_encode(['
+        . "'channel' => \$config['channel'], "
+        . "'endpoint' => \$config['resend']['endpoint'], "
+        . "'timeout' => \$config['resend']['timeout'], "
+        . "'api_vacia' => \$config['resend']['api_key'] === '', "
+        . "'from_vacio' => \$config['resend']['from'] === ''"
+        . "]);\n"
+    );
+
+    $proceso = proc_open(
+        [PHP_BINARY, '-d', 'auto_prepend_file=' . $prepend, $probe],
+        [1 => ['pipe', 'w'], 2 => ['file', $probe . '.err', 'a']],
+        $tuberias,
+        dirname(__DIR__)
+    );
+
+    $salida = is_resource($proceso) ? (string) stream_get_contents($tuberias[1]) : '';
+
+    if (is_resource($proceso)) {
+        fclose($tuberias[1]);
+        proc_close($proceso);
+    }
+
+    $datos = json_decode($salida, true);
+    $stderr = (string) @file_get_contents($probe . '.err');
+
+    @unlink($probe);
+    @unlink($probe . '.err');
+    @unlink($prepend);
+
+    return [
+        'datos' => is_array($datos) ? $datos : null,
+        'salida' => $salida,
+        'log' => $stderr,
+    ];
+}
+
+function ejecutarBootstrap(array $env, string $archivoLog): array
 {
     global $index, $base;
+
+    $prepend = escribirPrepend($env);
 
     foreach ([$archivoLog, $archivoLog . '.stderr'] as $archivo) {
         if (file_exists($archivo)) {
@@ -68,13 +119,15 @@ function ejecutarBootstrap(string $archivoLog): array
     ];
 
     $proceso = proc_open(
-        [PHP_BINARY, '-d', 'error_log=' . $archivoLog, $index],
+        [PHP_BINARY, '-d', 'error_log=' . $archivoLog, '-d', 'auto_prepend_file=' . $prepend, $index],
         $descriptores,
         $tuberias,
         $base
     );
 
     if (!is_resource($proceso)) {
+        @unlink($prepend);
+
         return ['salida' => '', 'log' => ''];
     }
 
@@ -82,28 +135,36 @@ function ejecutarBootstrap(string $archivoLog): array
     fclose($tuberias[1]);
     proc_close($proceso);
 
+    @unlink($prepend);
+
     $log = (string) @file_get_contents($archivoLog);
 
     return ['salida' => $salida, 'log' => $log];
 }
 
-if (file_exists($archivoLocal)) {
-    echo "OMITIDO: existe src/config/email.local.php (configuración local real).\n";
-    echo "Quitá temporalmente ese archivo para correr esta suite de selección de canal.\n";
-    exit(0);
-}
+echo "--- configuracion por defecto ---\n";
 
-$archivoLog = sys_get_temp_dir() . '/incancelables_bootstrap_test.log';
+$probe = ejecutarProbe(entornoNeutro());
 
-echo "--- configuración por defecto ---\n";
+check('el probe devuelve JSON valido', is_array($probe['datos']), $probe['salida']);
+check('sin errores de PHP en el probe', trim($probe['log']) === '', $probe['log']);
 
-$config = require $archivoConfig;
+$config = $probe['datos'] ?? [];
+
 check('channel por defecto = log', ($config['channel'] ?? null) === 'log', var_export($config['channel'] ?? null, true));
-check('resend.endpoint estructural', ($config['resend']['endpoint'] ?? null) === 'https://api.resend.com/emails');
-check('resend.timeout estructural = 10', ($config['resend']['timeout'] ?? null) === 10);
-check('resend.api_key vacía por defecto', ($config['resend']['api_key'] ?? null) === '');
-check('resend.from vacío por defecto', ($config['resend']['from'] ?? null) === '');
-check('el archivo de ejemplo existe y no se auto-carga', is_file($archivoEjemplo) && ($config['resend']['api_key'] ?? null) === '');
+check('resend.endpoint estructural', ($config['endpoint'] ?? null) === 'https://api.resend.com/emails');
+check('resend.timeout estructural = 10', ($config['timeout'] ?? null) === 10);
+check('resend.api_key vacia por defecto', ($config['api_vacia'] ?? null) === true);
+check('resend.from vacio por defecto', ($config['from_vacio'] ?? null) === true);
+
+echo "\n--- canal log explicito ---\n";
+
+$probe = ejecutarProbe(entornoResend('log', 're_test_dummy', 'Incancelables <no-reply@ejemplo.test>'));
+
+check('channel explicito log se aplica', ($probe['datos']['channel'] ?? null) === 'log', (string) ($probe['datos']['channel'] ?? 'null'));
+check('con canal log el endpoint se conserva', ($probe['datos']['endpoint'] ?? null) === 'https://api.resend.com/emails');
+check('con canal log el timeout se conserva en 10', ($probe['datos']['timeout'] ?? null) === 10);
+check('con canal log no se filtra la clave dummy', !str_contains($probe['salida'], 're_test_dummy'));
 
 echo "\n--- contrato intacto ---\n";
 
@@ -131,49 +192,56 @@ check('PedidoService no conoce Resend', !str_contains($pedidoService, 'Resend'))
 check('PedidoService no conoce cURL', !str_contains($pedidoService, 'curl'));
 check('EmailVerificationService no conoce Resend', !str_contains($emailVerificationService, 'Resend'));
 
-echo "\n--- selección de canal en el composition root ---\n";
+echo "\n--- seleccion de canal en el composition root ---\n";
 
-$ejecucion = ejecutarBootstrap($archivoLog);
+$archivoLog = sys_get_temp_dir() . '/incancelables_bootstrap_test.log';
+
+$ejecucion = ejecutarBootstrap(entornoNeutro(), $archivoLog);
 check('channel=log: el bootstrap termina bien', str_contains($ejecucion['salida'], 'Ruta no encontrada'), $ejecucion['salida']);
 check('channel=log: sin errores en el log', $ejecucion['log'] === '', $ejecucion['log']);
 
-try {
-    escribirLocal('resend', '', '');
-    $ejecucion = ejecutarBootstrap($archivoLog);
-    check('channel=resend sin api_key: falla explícitamente', str_contains($ejecucion['salida'], 'Error interno del servidor'), $ejecucion['salida']);
-    check('channel=resend sin api_key: mensaje del fallo', str_contains($ejecucion['log'], 'sin api_key configurada'), $ejecucion['log']);
-    check('channel=resend sin api_key: no hace fallback a log', !str_contains($ejecucion['salida'], 'Ruta no encontrada'));
+$ejecucion = ejecutarBootstrap(entornoResend('log', 're_test_dummy', 'Incancelables <no-reply@ejemplo.test>'), $archivoLog);
+check('channel=log explicito: el bootstrap termina bien', str_contains($ejecucion['salida'], 'Ruta no encontrada'), $ejecucion['salida']);
+check('channel=log explicito: sin errores en el log', $ejecucion['log'] === '', $ejecucion['log']);
 
-    $lineas = array_values(array_filter(explode("\n", trim($ejecucion['log']))));
-    check(
-        'channel=resend sin api_key: sólo el mensaje del fallo en el log',
-        count($lineas) === 1 && str_contains($ejecucion['log'], '[incancelables] Canal de email resend sin api_key configurada'),
-        $ejecucion['log']
-    );
+$ejecucion = ejecutarBootstrap(entornoResend('resend', '', 'Incancelables <no-reply@ejemplo.test>'), $archivoLog);
+check('channel=resend sin api_key: falla explicitamente', str_contains($ejecucion['salida'], 'Error interno del servidor'), $ejecucion['salida']);
+check('channel=resend sin api_key: mensaje del fallo', str_contains($ejecucion['log'], 'sin api_key configurada'), $ejecucion['salida']);
+check('channel=resend sin api_key: no hace fallback a log', !str_contains($ejecucion['salida'], 'Ruta no encontrada'));
 
-    escribirLocal('resend', 're_test_dummy', '');
-    $ejecucion = ejecutarBootstrap($archivoLog);
-    check('channel=resend sin from: falla explícitamente', str_contains($ejecucion['log'], 'sin remitente'), $ejecucion['log']);
-    check('channel=resend sin from: no hace fallback a log', !str_contains($ejecucion['salida'], 'Ruta no encontrada'));
-    check('channel=resend sin from: sin secretos en el log', !str_contains($ejecucion['log'], 're_test_dummy'), $ejecucion['log']);
+$lineas = array_values(array_filter(explode("\n", trim($ejecucion['log']))));
+check(
+    'channel=resend sin api_key: solo el mensaje del fallo en el log',
+    count($lineas) === 1 && str_contains($ejecucion['log'], '[incancelables] Canal de email resend sin api_key configurada'),
+    $ejecucion['log']
+);
 
-    escribirLocal('resend', 're_test_dummy', 'Incancelables <no-reply@ejemplo.test>');
-    $ejecucion = ejecutarBootstrap($archivoLog);
-    check('channel=resend con configuración: el bootstrap termina bien', str_contains($ejecucion['salida'], 'Ruta no encontrada'), $ejecucion['salida']);
-    check('channel=resend con configuración: sin secretos en el log', !str_contains($ejecucion['log'], 're_test_dummy'), $ejecucion['log']);
-    check('channel=resend con configuración: sin errores en el log', $ejecucion['log'] === '', $ejecucion['log']);
+$ejecucion = ejecutarBootstrap(entornoResend('resend', 're_test_dummy', ''), $archivoLog);
+check('channel=resend sin from: falla explicitamente', str_contains($ejecucion['log'], 'sin remitente'), $ejecucion['salida']);
+check('channel=resend sin from: no hace fallback a log', !str_contains($ejecucion['salida'], 'Ruta no encontrada'));
+check('channel=resend sin from: sin secretos en el log', !str_contains($ejecucion['log'], 're_test_dummy'), $ejecucion['log']);
 
-    escribirLocal('desconocido', '', '');
-    $ejecucion = ejecutarBootstrap($archivoLog);
-    check('canal desconocido: falla explícitamente', str_contains($ejecucion['log'], 'Canal de email desconocido'), $ejecucion['log']);
-    check('canal desconocido: sin errores de PHP', !str_contains($ejecucion['log'], 'Fatal error') && !str_contains($ejecucion['log'], 'Uncaught'), $ejecucion['log']);
-} finally {
-    if (file_exists($archivoLocal)) {
-        unlink($archivoLocal);
-    }
+$ejecucion = ejecutarBootstrap(entornoResend('resend', 're_test_dummy', 'Incancelables <no-reply@ejemplo.test>'), $archivoLog);
+check('channel=resend con configuracion: el bootstrap termina bien', str_contains($ejecucion['salida'], 'Ruta no encontrada'), $ejecucion['salida']);
+check('channel=resend con configuracion: sin secretos en el log', !str_contains($ejecucion['log'], 're_test_dummy'), $ejecucion['log']);
+check('channel=resend con configuracion: sin errores en el log', $ejecucion['log'] === '', $ejecucion['log']);
+
+$ejecucion = ejecutarBootstrap(entornoResend('desconocido', '', ''), $archivoLog);
+check('canal desconocido: falla explicitamente', str_contains($ejecucion['log'], 'Canal de email desconocido'), $ejecucion['log']);
+check('canal desconocido: sin secretos en el log', !str_contains($ejecucion['log'], 're_test_dummy'), $ejecucion['log']);
+check('canal desconocido: sin errores de PHP', !str_contains($ejecucion['log'], 'Fatal error') && !str_contains($ejecucion['log'], 'Uncaught'), $ejecucion['log']);
+
+if (file_exists($archivoLog)) {
+    unlink($archivoLog);
 }
 
-check('no queda email.local.php tras la suite', !file_exists($archivoLocal));
+if (file_exists($archivoLog . '.stderr')) {
+    unlink($archivoLog . '.stderr');
+}
+
+echo "\n--- los archivos locales reales permanecen intactos ---\n";
+
+check('.env sigue existiendo', is_file($base . '/.env'));
 
 echo "\nOK: $ok\n";
 

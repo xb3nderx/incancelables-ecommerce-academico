@@ -5,6 +5,7 @@ storage/logs/*
 # Configuración local / secretos
 .env
 .env.*
+!.env.example
 src/config/email.local.php
 
 # Dependencias
