@@ -58,8 +58,14 @@ final class PedidoController
     public function cancelar(array $parametros = []): void
     {
         $pedidoId = $this->pedidoIdDesdeParametros($parametros);
+        $cuerpo = file_get_contents('php://input');
+        $datos = json_decode($cuerpo === false ? '' : $cuerpo, true);
 
-        $resultado = $this->pedidoService->cancelarPedido($pedidoId);
+        if (!is_array($datos)) {
+            responder(400, ['error' => 'Cuerpo JSON inválido']);
+        }
+
+        $resultado = $this->pedidoService->cancelarPedido($pedidoId, $this->tokenDesdeDatos($datos));
 
         if ($resultado['resultado'] === 'error') {
             $this->responderErrorDePedido($resultado);
@@ -78,6 +84,8 @@ final class PedidoController
         if (!is_array($datos)) {
             responder(400, ['error' => 'Cuerpo JSON inválido']);
         }
+
+        $token = $this->tokenDesdeDatos($datos);
 
         if (!array_key_exists('accion', $datos)) {
             responder(400, ['error' => 'Falta el campo accion']);
@@ -127,7 +135,7 @@ final class PedidoController
             $items = $this->validarItemsCuerpo($datos);
         }
 
-        $resultado = $this->pedidoService->procesarPago($pedidoId, $datos['accion'], $items, $proveedor, $simulacion);
+        $resultado = $this->pedidoService->procesarPago($pedidoId, $datos['accion'], $items, $proveedor, $simulacion, $token);
 
         if ($resultado['resultado'] === 'error') {
             $this->responderErrorDePedido($resultado);
@@ -163,6 +171,10 @@ final class PedidoController
             'proveedor_faltante' => 400,
             'proveedor_inexistente' => 400,
             'proveedor_no_soportado' => 400,
+            'token_invalido' => 400,
+            'token_expirado' => 400,
+            'verificacion_pendiente' => 409,
+            'pedido_no_autorizado' => 403,
         ];
 
         $cuerpo = ['error' => $resultado['error']];
@@ -183,5 +195,18 @@ final class PedidoController
     private function validarItemsCuerpo(array $datos): array
     {
         return ItemsRequestValidator::validar($datos);
+    }
+
+    private function tokenDesdeDatos(array $datos): string
+    {
+        if (!array_key_exists('token', $datos)) {
+            responder(400, ['error' => 'Falta el campo token']);
+        }
+
+        if (!is_string($datos['token']) || trim($datos['token']) === '' || strlen($datos['token']) > 255) {
+            responder(400, ['error' => 'token inválido']);
+        }
+
+        return trim($datos['token']);
     }
 }

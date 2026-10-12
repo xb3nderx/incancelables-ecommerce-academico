@@ -82,11 +82,12 @@ final class PedidoService
 
             $this->pedidoRepository->confirmar();
 
-            $this->iniciarVerificacionDeEmail($pedidoId, $email);
+            $emailEnviado = $this->iniciarVerificacionDeEmail($pedidoId, $email);
 
             return [
                 'resultado' => 'creado',
                 'pedido' => ['id' => $pedidoId, 'estado' => 'PEND_VERIF'],
+                'email_enviado' => $emailEnviado,
             ];
         } catch (\Throwable $error) {
             $this->pedidoRepository->deshacer();
@@ -300,10 +301,10 @@ final class PedidoService
             return ['resultado' => 'error', 'error' => 'varios_pedidos_activos'];
         }
 
-        return $this->procesarPago((int) $activos[0]['id'], 'aceptar_correccion', $items);
+        return $this->procesarPago((int) $activos[0]['id'], 'aceptar_correccion', $items, null, null, $token);
     }
 
-    public function cancelarPedido(int $pedidoId): array
+    public function cancelarPedido(int $pedidoId, string $token): array
     {
         $this->pedidoRepository->iniciarTransaccion();
 
@@ -314,6 +315,13 @@ final class PedidoService
                 $this->pedidoRepository->deshacer();
 
                 return ['resultado' => 'error', 'error' => 'pedido_inexistente'];
+            }
+
+            $autorizacion = $this->autorizarPedidoPorToken($pedido, $token);
+            if ($autorizacion !== null) {
+                $this->pedidoRepository->deshacer();
+
+                return $autorizacion;
             }
 
             if ($this->estaActivoCheckout($pedido['estado']) && $this->primerPeriodoVencido($pedido)) {
@@ -351,7 +359,14 @@ final class PedidoService
         }
     }
 
-    public function procesarPago(int $pedidoId, string $accion, array $items = [], ?string $proveedor = null, ?string $simulacion = null): array
+    public function procesarPago(
+        int $pedidoId,
+        string $accion,
+        array $items = [],
+        ?string $proveedor = null,
+        ?string $simulacion = null,
+        string $token = '',
+    ): array
     {
         if (!in_array($accion, ['iniciar_pago', 'aceptar_correccion'], true)) {
             return ['resultado' => 'error', 'error' => 'accion_invalida'];
@@ -370,6 +385,13 @@ final class PedidoService
                 $this->pedidoRepository->deshacer();
 
                 return ['resultado' => 'error', 'error' => 'pedido_inexistente'];
+            }
+
+            $autorizacion = $this->autorizarPedidoPorToken($pedido, $token);
+            if ($autorizacion !== null) {
+                $this->pedidoRepository->deshacer();
+
+                return $autorizacion;
             }
 
             if ($this->estaActivoCheckout($pedido['estado']) && $this->primerPeriodoVencido($pedido)) {
@@ -817,6 +839,29 @@ final class PedidoService
         return in_array($estado, self::ESTADOS_ACTIVOS_CHECKOUT, true);
     }
 
+    private function autorizarPedidoPorToken(array $pedido, string $token): ?array
+    {
+        $registro = $this->emailVerificationService->consultarPorToken($token);
+
+        if ($registro === null) {
+            return ['resultado' => 'error', 'error' => 'token_invalido'];
+        }
+
+        if ($registro['expirado']) {
+            return ['resultado' => 'error', 'error' => 'token_expirado'];
+        }
+
+        if (!$registro['verificado']) {
+            return ['resultado' => 'error', 'error' => 'verificacion_pendiente'];
+        }
+
+        if ($pedido['email_verificacion_id'] !== $registro['id']) {
+            return ['resultado' => 'error', 'error' => 'pedido_no_autorizado'];
+        }
+
+        return null;
+    }
+
     private function primerPeriodoVencido(array $pedido): bool
     {
         return !$this->primerPeriodoVigente($pedido['created_at'], $pedido['ahora']);
@@ -881,17 +926,23 @@ final class PedidoService
         }
     }
 
-    private function iniciarVerificacionDeEmail(int $pedidoId, string $email): void
+    private function iniciarVerificacionDeEmail(int $pedidoId, string $email): bool
     {
         try {
             $verificacion = $this->emailVerificationService->iniciar($email);
             $this->pedidoRepository->asociarEmailVerificacion($pedidoId, $verificacion['email_verificacion_id']);
 
-            if ($this->enviarEmailVerificacion($email, $verificacion['token'])) {
-                $this->emailVerificationService->registrarEnvio($verificacion['email_verificacion_id']);
+            if (!$this->enviarEmailVerificacion($email, $verificacion['token'])) {
+                return false;
             }
+
+            $this->emailVerificationService->registrarEnvio($verificacion['email_verificacion_id']);
+
+            return true;
         } catch (\Throwable $error) {
             error_log('[incancelables] verificacion de email no iniciada para el pedido ' . $pedidoId . ': ' . $error->getMessage());
+
+            return false;
         }
     }
 
