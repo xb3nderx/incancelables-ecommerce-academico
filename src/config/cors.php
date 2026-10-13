@@ -8,6 +8,7 @@ return [
     'origenes' => [
         'dev' => [
             'http://127.0.0.1:5500',
+            'https://xb3nderx.github.io',
         ],
         'prod' => [],
     ],
