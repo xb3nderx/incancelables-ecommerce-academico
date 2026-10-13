@@ -1,5 +1,5 @@
 <?php
 
 return [
-    'url_verificacion_checkout' => 'http://127.0.0.1:5500/pages/resultado.html',
+    'url_verificacion_checkout' => 'https://xb3nderx.github.io/incancelables-frontend-academico/pages/resultado.html',
 ];
