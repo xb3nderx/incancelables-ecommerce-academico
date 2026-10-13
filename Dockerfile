@@ -9,6 +9,10 @@ RUN apt-get update \
 # Habilitar reescritura de URLs
 RUN a2enmod rewrite
 
+# Diagnóstico de módulos MPM habilitados
+RUN ls -l /etc/apache2/mods-enabled/mpm_*.load \
+    && apache2ctl -t
+
 # Configurar public/ como directorio web
 ENV APACHE_DOCUMENT_ROOT=/var/www/html/public
 
