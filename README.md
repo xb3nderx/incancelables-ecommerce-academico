@@ -285,8 +285,9 @@ incancelables-frontend-academico/
 │   ├── carrito.js              # Gestión del carrito y sus cantidades
 │   ├── resultado.js            # Verificación, recuperación y pago de pedidos
 │   └── api/
-│       ├── apiConfig.js        # Configuración de la URL del backend del newsletter
-│       └── tiendaClient.js     # Comunicación HTTP con la API del e-commerce
+   │   ├── apiConfig.js       # Configuración de la API de newsletter
+   │   ├── tiendaConfig.js    # URL del backend del e-commerce
+   │   └── tiendaClient.js    # Cliente HTTP del e-commerce
 └── ...                         # Otros componentes del sitio
 ```
 
@@ -295,8 +296,8 @@ incancelables-frontend-academico/
 - **Catálogo (`tienda.html` y `tienda.js`):** presenta los productos obtenidos desde la API, sus precios y disponibilidad, y permite iniciar la selección de artículos.
 - **Carrito (`carrito.js`):** administra los productos seleccionados, cantidades y totales. Mantiene el estado del carrito en `sessionStorage` y calcula la disponibilidad visible considerando las unidades ya seleccionadas.
 - **Checkout (`tienda.js` y módulos asociados):** reúne los datos necesarios para crear el pedido y comunica al comprador los resultados de las validaciones del backend.
-- **Verificación y continuación (`resultado.html` y `resultado.js`):** procesa el enlace de verificación recibido por correo, recupera los pedidos autorizados y permite continuar la compra.
-- **Corrección y pago (`resultado.js`):** gestiona las respuestas de validación previas al pago, la corrección de condiciones comerciales y los resultados del proveedor de pago simulado.
+- **Verificación y continuación (`resultado.html`, `resultado.js` y `tienda.js`):** `resultado.js` procesa el enlace de verificación recibido por correo, valida el token y permite continuar hacia la tienda. En `tienda.js` se recuperan los pedidos autorizados y se continúa la compra.
+- **Corrección y pago (`tienda.js`):** gestiona las respuestas de validación previas al pago, el reemplazo de pedidos cuando cambian las condiciones comerciales y los resultados del proveedor de pago simulado.
 - **Cliente de API (`scripts/api/tiendaClient.js`):** centraliza las solicitudes HTTP del módulo Tienda y el tratamiento de las respuestas del backend.
 
 El frontend gestiona la interacción con el comprador, mientras que el backend conserva la responsabilidad de validar precios, disponibilidad, autorización, estados de pedidos y pagos, y operaciones sobre el stock físico.
